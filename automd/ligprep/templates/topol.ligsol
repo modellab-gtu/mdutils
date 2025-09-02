@@ -1,9 +1,9 @@
 ; Include forcefield parameters
 #include "./amber99sb-ildn.ff/forcefield.itp"
-# include "./MB1_GMX_GAFF.rtp"
+# include "./LIGAND_GMX_GAFF.rtp"
 
 ; Include ligand topology
-#include "./MB1_GMX.itp"
+#include "./LIGAND_GMX.itp"
 
 #ifdef POSRES_LIG
 #include "./posre_ligand.itp"
@@ -24,9 +24,8 @@
 
 
 [ system ]
-MB1 in water
+LIGAND in water
 
 [ molecules ]
 ; Compound        nmols
-MB1               1
-SOL                10
+LIGAND               1
