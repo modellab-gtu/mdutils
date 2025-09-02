@@ -165,6 +165,12 @@ def runLigPrep(file_name):
         else:
             print("Error: Could not generated ESP charges..")
             sys.exit(1)
+# Get the directory where the current script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Construct the full path to ligPrepHelper.sh
+helper_script = os.path.join(script_dir, "ligPrepHelper.sh")
+
+# Call the shell script using the full path
 
 
 if __name__ == "__main__":
@@ -176,10 +182,9 @@ if __name__ == "__main__":
         file_base = file_name.split(".")[0]
         try:
             runLigPrep(file_name)
-            os.system("bash ligPrepHelper.sh %s" %file_base)
+            os.system(f"bash {helper_script} {file_base}")
         except:
             print("Error for %s file !!! Skipping...")
             failed_csv.write(file_name+",\n")
         #  break
     failed_csv.close()
-
