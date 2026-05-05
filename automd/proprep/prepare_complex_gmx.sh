@@ -375,6 +375,14 @@ PY
     [[ -s "${PROTEIN_PDB}.fixed" ]] && mv "${PROTEIN_PDB}.fixed" "$PROTEIN_PDB"
     log "PDBFixer done"
 
+    # Verify force field exists before running pdb2gmx
+    GMX_DATA="$(gmx --version 2>/dev/null | awk '/Data prefix/{print $4}')"
+    if [[ ! -d "${GMX_DATA}/top/${FF}.ff" ]]; then
+        echo "Available force fields:" >&2
+        ls "${GMX_DATA}/top/"*.ff 2>/dev/null | sed 's|.*/||;s|\.ff||' >&2 || true
+        die "Force field '${FF}.ff' not found in ${GMX_DATA}/top/"
+    fi
+
     log "Running pdb2gmx"
     gmx pdb2gmx -f "$PROTEIN_PDB" -o "$PROTEIN_GRO" -p "$PROTEIN_TOP" \
         -i posre_protein.itp -ff "$FF" -water "$WATER" -ignh -merge all
