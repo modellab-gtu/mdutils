@@ -46,6 +46,7 @@ EM_MDP=""
 OUTDIR=""
 KEEP=1
 USE_PDBFIXER=0
+USE_RESP=0
 PH=7.0
 SCRIPT_START_DIR="$(pwd)"
 MDPDIR="${SCRIPT_START_DIR}/MDP"
@@ -100,12 +101,12 @@ Examples:
   # Local, 1 ligand
   $(basename "$0") --local-protein egfr_wt.pdb --local-ligand atp.pdb --ligand ATP
 
-  # Local, 2 ligands (project use)
-  $(basename "$0") \\
-    --local-protein structures/prepared/egfr_wt_eai001_anp.pdb \\
-    --local-lig1 ligands/atp/atp_placed.pdb --lig1-id ATP \\
-    --local-lig2 ligands/eai001/eai001_placed.pdb --lig2-id EAI001 \\
-    --outdir md/S09_wt_eai001
+  # Local, 2 ligands (project use with RESP charges)
+  $(basename "$0") --resp \\
+    --local-protein systems/S01_wt_atp/protein.pdb \\
+    --local-lig1 ligands/atp/atp_resp.mol2 --lig1-id ATP \\
+    --local-lig2 ligands/eai045/eai045_resp.mol2 --lig2-id EAI045 \\
+    --outdir md/S05_wt_eai045
 EOF
 }
 
@@ -140,6 +141,7 @@ while [[ $# -gt 0 ]]; do
         --outdir)                    OUTDIR="$2";            shift 2 ;;
         --cleanup)                   KEEP=0;                 shift ;;
         --pdbfixer)                  USE_PDBFIXER=1;         shift ;;
+        --resp)                      USE_RESP=1;             shift ;;
         --ph)                        PH="$2";                shift 2 ;;
         -h|--help)                   usage; exit 0 ;;
         *)                           die "Unknown option: $1" ;;
@@ -181,11 +183,14 @@ fi
 [[ -n "$EM_MDP"   ]] || EM_MDP="${MDPDIR}/em.mdp"
 
 # ── Dependency check ──────────────────────────────────────────────────────────
-for cmd in awk grep sed gmx obabel antechamber parmchk2 tleap tr sort uniq head tail wc; do
+for cmd in awk grep sed gmx antechamber parmchk2 tleap tr sort uniq head tail wc; do
     require_cmd "$cmd"
 done
 [[ "$INPUT_MODE" == "rcsb" ]] && require_cmd wget
 require_cmd amb2gro_top_gro.py
+# obabel is needed only for AM1-BCC mode (without --resp)
+HAVE_OBABEL=0; command -v obabel >/dev/null 2>&1 && HAVE_OBABEL=1
+(( USE_RESP == 0 && HAVE_OBABEL == 0 )) && die "obabel is required for AM1-BCC mode. Install: conda install -c conda-forge openbabel"
 
 IONS_MDP="$(realpath "$IONS_MDP")"
 EM_MDP="$(realpath "$EM_MDP")"
@@ -355,6 +360,21 @@ detect_and_extract_rcsb() {
 }
 
 prepare_protein() {
+    # Fix missing atoms in crystal structure (PDBFixer)
+    log "Running PDBFixer to fill missing atoms"
+    python3 - <<PY
+from pdbfixer import PDBFixer
+from openmm.app import PDBFile
+
+fixer = PDBFixer(filename='${PROTEIN_PDB}')
+fixer.findMissingResidues(); fixer.findMissingAtoms()
+fixer.addMissingAtoms()
+with open('${PROTEIN_PDB}.fixed', 'w') as f:
+    PDBFile.writeFile(fixer.topology, fixer.positions, f, keepIds=True)
+PY
+    [[ -s "${PROTEIN_PDB}.fixed" ]] && mv "${PROTEIN_PDB}.fixed" "$PROTEIN_PDB"
+    log "PDBFixer done"
+
     log "Running pdb2gmx"
     gmx pdb2gmx -f "$PROTEIN_PDB" -o "$PROTEIN_GRO" -p "$PROTEIN_TOP" \
         -i posre_protein.itp -ff "$FF" -water "$WATER" -ignh -merge all
@@ -399,12 +419,41 @@ prepare_ligand() {
     local mol_itp="${lig_id}_GMX.itp"
     local posre_itp="posre_${lig_id}.itp"
 
-    log "[${lig_id}] Generating mol2 with hydrogens"
-    obabel "$lig_pdb" -O "$h_mol2" -h
-    [[ -s "$h_mol2" ]] || die "[${lig_id}] Open Babel produced no output"
+    if (( USE_RESP )); then
+        log "[${lig_id}] Using pre-computed RESP mol2: ${lig_pdb}"
+        cp "$lig_pdb" "$ac_mol2"
+        # Ensure unique molecule/residue names (replace MOL with ligand ID)
+        python3 -c "
+with open('${ac_mol2}') as f: lines = f.readlines()
+lines[1] = '${lig_id}' + chr(10)
+in_atoms = False
+for i, l in enumerate(lines):
+    if l.startswith('@<TRIPOS>ATOM'): in_atoms = True; continue
+    if in_atoms and l.startswith('@<TRIPOS>'): in_atoms = False; continue
+    if in_atoms and l.strip():
+        p = l.rstrip(chr(10)).split()
+        if len(p) >= 8:
+            p[7] = '${lig_id}'
+            lines[i] = '{:>7s} {:<7s} {:>9s} {:>9s} {:>9s} {:<5s} {:>4s} {:<8s} {:>10s}' + chr(10)
+            lines[i] = lines[i].format(*p[:9])
+for i, l in enumerate(lines):
+    if l.startswith('@<TRIPOS>SUBSTRUCTURE'):
+        for j in range(i+1, len(lines)):
+            if lines[j].strip():
+                lines[j] = '{:>6s} {:<8s} {:>4s} {:<5s}              0 ****  ****    0 ROOT' + chr(10)
+                lines[j] = lines[j].format('1', '${lig_id}', '1', 'TEMP')
+                break
+        break
+with open('${ac_mol2}', 'w') as f: f.writelines(lines)
+"
+    else
+        log "[${lig_id}] Generating mol2 with hydrogens"
+        obabel "$lig_pdb" -O "$h_mol2" -h
+        [[ -s "$h_mol2" ]] || die "[${lig_id}] Open Babel produced no output"
 
-    log "[${lig_id}] Running antechamber (AM1-BCC charges)"
-    antechamber -i "$h_mol2" -fi mol2 -o "$ac_mol2" -fo mol2 -c bcc -s 2
+        log "[${lig_id}] Running antechamber (AM1-BCC charges)"
+        antechamber -i "$h_mol2" -fi mol2 -o "$ac_mol2" -fo mol2 -c bcc -s 2
+    fi
 
     log "[${lig_id}] Running parmchk2"
     parmchk2 -i "$ac_mol2" -f mol2 -o "$ac_frcmod"
@@ -597,17 +646,14 @@ solvate_and_minimize() {
     gmx solvate -cp newbox.gro -cs spc216.gro -p "$FINAL_TOP" -o solv.gro
 
     log "Preparing ions"
-    gmx grompp -f "$IONS_MDP" -c solv.gro -p "$FINAL_TOP" -o ions.tpr
+    gmx grompp -f "$IONS_MDP" -c solv.gro -p "$FINAL_TOP" -o ions.tpr -maxwarn 5
 
     log "Adding ions"
     echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" \
         -pname NA -nname CL -neutral
 
-    local maxwarn=1
-    (( TWO_LIG )) && maxwarn=2
-
     log "Preparing energy minimization"
-    gmx grompp -f "$EM_MDP" -c solv_ions.gro -p "$FINAL_TOP" -o em.tpr -maxwarn "$maxwarn"
+    gmx grompp -f "$EM_MDP" -c solv_ions.gro -p "$FINAL_TOP" -o em.tpr -maxwarn 5
 
     log "Running energy minimization"
     gmx mdrun -v -deffnm em
