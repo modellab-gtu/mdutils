@@ -19,6 +19,7 @@ set -Eeuo pipefail
 #   - Optional Gaussian16 optimization before RESP ESP calculation
 #   - Amber ligand topology conversion to GROMACS through amb2gro_top_gro.py
 #   - Final topol.top construction, solvation, ionization, minimization
+#  - Post-ionization index with Protein_<LIGID> group for tc-grps
 ###############################################################################
 
 PROID="3HTB"
@@ -717,11 +718,121 @@ merge_gro_files() {
 }
 
 generate_index() {
-    log "Generating index file"
+    log "Generating initial index file from unsolvated complex"
     gmx make_ndx -f "$COMPLEX_GRO" -o "$INDEX_NDX" <<EOF_NDX
 q
 EOF_NDX
     [[ -s "$INDEX_NDX" ]] || die "index.ndx was not created"
+}
+
+generate_tc_index_after_ions() {
+    local coord="${1:-solv_ions.gro}"
+    local tmp_ndx="default_after_ions.tmp.ndx"
+    local tc_group="Protein_${LIGID}"
+    local group_count protein_group ligand_group new_group
+
+    [[ -s "$coord" ]] || die "Cannot generate production index; coordinate file missing: $coord"
+
+    log "Generating default post-ionization index from ${coord}"
+    gmx make_ndx -f "$coord" -o "$tmp_ndx" <<EOF_NDX_DEFAULT
+q
+EOF_NDX_DEFAULT
+    [[ -s "$tmp_ndx" ]] || die "Temporary post-ionization index was not created"
+
+    group_count="$(
+        awk '/^\[/{n++} END{print n+0}' "$tmp_ndx"
+    )"
+    [[ "$group_count" =~ ^[0-9]+$ ]] || die "Could not count groups in $tmp_ndx"
+
+    protein_group="$(
+        awk '
+            BEGIN { i=-1 }
+            /^\[/ {
+                i++
+                name=$0
+                gsub(/^\[ */, "", name)
+                gsub(/ *\]$/, "", name)
+                if (name == "Protein") {
+                    print i
+                    exit
+                }
+            }
+        ' "$tmp_ndx"
+    )"
+    [[ -n "$protein_group" ]] || die "Could not find default [ Protein ] group in $tmp_ndx"
+
+    ligand_group="$(
+        awk -v lig="$LIGID" -v mol="$LIG_MOLNAME" '
+            BEGIN { i=-1 }
+            /^\[/ {
+                i++
+                name=$0
+                gsub(/^\[ */, "", name)
+                gsub(/ *\]$/, "", name)
+                if (name == lig || name == mol) {
+                    print i
+                    exit
+                }
+            }
+        ' "$tmp_ndx"
+    )"
+
+    if [[ -z "$ligand_group" ]]; then
+        log "Warning: could not find ligand group named ${LIGID} or ${LIG_MOLNAME} in default index"
+        log "Warning: falling back to make_ndx group 13, matching the manual 1|13 workflow"
+        ligand_group=13
+    fi
+
+    [[ "$protein_group" =~ ^[0-9]+$ ]] || die "Invalid Protein group index: $protein_group"
+    [[ "$ligand_group" =~ ^[0-9]+$ ]] || die "Invalid ligand group index: $ligand_group"
+
+    if (( protein_group >= group_count )); then
+        die "Protein group index ${protein_group} is outside default index group count ${group_count}"
+    fi
+    if (( ligand_group >= group_count )); then
+        die "Ligand group index ${ligand_group} is outside default index group count ${group_count}"
+    fi
+
+    # make_ndx group numbering is zero-based. After one OR operation, the newly
+    # created group number is the previous number of groups.
+    new_group="$group_count"
+
+    log "Creating production tc-grps index group: ${tc_group}"
+    log "make_ndx operation: ${protein_group}|${ligand_group}; rename group ${new_group} to ${tc_group}"
+    gmx make_ndx -f "$coord" -o "$INDEX_NDX" <<EOF_NDX_TC
+${protein_group}|${ligand_group}
+name ${new_group} ${tc_group}
+q
+EOF_NDX_TC
+    [[ -s "$INDEX_NDX" ]] || die "Production index.ndx was not created"
+
+    awk -v grp="$tc_group" '
+        BEGIN { found=0 }
+        /^\[/ {
+            name=$0
+            gsub(/^\[ */, "", name)
+            gsub(/ *\]$/, "", name)
+            if (name == grp) found=1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$INDEX_NDX" || die "Production index lacks expected group [ ${tc_group} ]"
+
+    if ! awk '
+        BEGIN { found=0 }
+        /^\[/ {
+            name=$0
+            gsub(/^\[ */, "", name)
+            gsub(/ *\]$/, "", name)
+            if (name == "Water_and_ions") found=1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$INDEX_NDX"; then
+        log "Warning: [ Water_and_ions ] was not found in index.ndx; check tc-grps in your NVT/NPT/MD MDP files"
+    fi
+
+    rm -f "$tmp_ndx"
+    log "Production index ready: ${INDEX_NDX}"
+    log "Use in MDP: tc-grps = ${tc_group} Water_and_ions"
 }
 
 solvate_and_minimize() {
@@ -741,6 +852,8 @@ solvate_and_minimize() {
 
     log "Adding ions"
     echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" -pname NA -nname CL -neutral
+
+    generate_tc_index_after_ions "solv_ions.gro"
 
     log "Preparing minimization"
     gmx grompp -f "$EM_MDP" -c solv_ions.gro -r solv_ions.gro -p "$FINAL_TOP" -o em.tpr
@@ -774,6 +887,7 @@ RESP optimization:     ${RESP_OPT}
 Final topology:        ${FINAL_TOP}
 Complex coordinates:   ${COMPLEX_GRO}
 Index file:            ${INDEX_NDX}
+Production tc-grps:    Protein_${LIGID} Water_and_ions
 Log file:              ${LOGFILE}
 EOF_SUMMARY
 }
