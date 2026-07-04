@@ -1,9 +1,7 @@
-; NPT equilibration - C-rescale barostat (GROMACS >= 2021)
-; C-rescale gives correct NPT ensemble while remaining stable during equilibration,
-; replacing the old Berendsen -> Parrinello-Rahman two-step workflow.
+; NPT equilibration - Langevin dynamics + C-rescale barostat (GROMACS >= 2021)
 define                   = -DPOSRES -DPOSRES_LIG
 ; Run control
-integrator               = md
+integrator               = sd
 tinit                    = 0
 dt                       = 0.002
 nsteps                   = 500000              ; 1 ns
@@ -33,8 +31,8 @@ fourierspacing           = 0.16
 pme_order                = 4
 ewald_rtol               = 1e-05
 epsilon_surface          = 0
-; Temperature coupling
-tcoupl                   = V-rescale
+; Temperature coupling - handled by sd integrator (Langevin)
+tcoupl                   = no
 ; Replace "Protein_" with your actual ligand name (e.g. Protein_LIG) — see prep script output
 tc-grps                  = Protein_ Water_and_ions
 tau_t                    = 1.0   1.0

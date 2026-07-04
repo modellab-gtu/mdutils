@@ -1,6 +1,6 @@
-; Production MD - NpT ensemble, no position restraints (GROMACS >= 2021)
+; Production MD - Langevin dynamics + C-rescale barostat (GROMACS >= 2021)
 ; Run control
-integrator               = md
+integrator               = sd
 tinit                    = 0
 dt                       = 0.002              ; 2 fs timestep (h-bonds constraints)
 nsteps                   = 50000000           ; 100 ns
@@ -31,8 +31,8 @@ fourierspacing           = 0.16
 pme_order                = 4
 ewald_rtol               = 1e-05
 epsilon_surface          = 0
-; Temperature coupling
-tcoupl                   = V-rescale
+; Temperature coupling - handled by sd integrator (Langevin)
+tcoupl                   = no
 ; Replace "Protein_" with your actual ligand name, e.g. "Protein_LIG"
 ; The prep script logs the exact group name: tc-grps = Protein_<LIGID> Water_and_ions
 tc-grps                  = Protein_ Water_and_ions
