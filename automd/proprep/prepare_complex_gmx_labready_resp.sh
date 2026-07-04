@@ -45,7 +45,6 @@ RUN_SOLVATE_MINIMIZE=1
 
 # Topology pathway
 USE_PARMED=0               # 0 = pdb2gmx + amb2gro_top_gro.py  |  1 = full tleap + parmed
-AMBER_FF="ff14SB"          # AMBER protein force field for parmed pathway
 
 # Ligand charge/RESP controls
 CHARGE_METHOD="bcc"        # resp (Gaussian16) or any antechamber -c value: bcc, abcg2, mul, cm2, …
@@ -86,7 +85,7 @@ General options:
       --local-ligand FILE      Local ligand PDB file
       --lig-chain CHAIN        Ligand chain ID for RCSB mode
       --lig-resi RESI          Ligand residue number for RCSB mode
-  -f, --ff NAME                GROMACS protein force field, default: ${FF}
+  -f, --ff NAME                Protein force field (GROMACS name used by both pathways), default: ${FF}
   -w, --water NAME             Water model, default: ${WATER}
   -b, --boxtype TYPE           Box type, default: ${BOXTYPE}
   -d, --distance NM            Solvent distance in nm, default: ${BOXDIST}
@@ -98,7 +97,6 @@ General options:
       --ph VALUE               pH for PDBFixer hydrogen addition, default: ${PH}
       --skip-solvate-minimize  Stop after complex.gro, topol.top, and index.ndx
       --use-parmed             Use tleap+parmed pathway instead of pdb2gmx+amb2gro
-      --amber-ff NAME          AMBER protein force field for parmed pathway, default: ${AMBER_FF}
   -h, --help                   Show this help
 
 Ligand charge options:
@@ -181,7 +179,6 @@ while [[ $# -gt 0 ]]; do
         --ph) PH="$2"; shift 2 ;;
         --skip-solvate-minimize) RUN_SOLVATE_MINIMIZE=0; shift ;;
         --use-parmed) USE_PARMED=1; shift ;;
-        --amber-ff) AMBER_FF="$2"; shift 2 ;;
         --charge-method) CHARGE_METHOD="$(echo "$2" | tr '[:upper:]' '[:lower:]')"; shift 2 ;;
         -q|--charge) LIG_CHARGE="$2"; shift 2 ;;
         -m|--mult) LIG_MULT="$2"; shift 2 ;;
@@ -248,7 +245,20 @@ for cmd in awk grep sed gmx obabel antechamber parmchk2 tleap tr sort uniq head 
     require_cmd "$cmd"
 done
 [[ "$INPUT_MODE" == "rcsb" ]] && require_cmd wget
-require_cmd amb2gro_top_gro.py
+
+# If the chosen FF has no GROMACS force field directory, automatically use the parmed pathway.
+_gmx_prefix=$(gmx --version 2>/dev/null | awk '/Data prefix:/{print $NF}')
+if [[ ! -d "${_gmx_prefix}/share/gromacs/top/${FF}.ff" ]]; then
+    if [[ "$USE_PARMED" -eq 1 ]]; then
+        : # user already requested parmed, FF is fine for tleap
+    else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Note: '${FF}' is not a GROMACS force field — automatically switching to tleap+parmed pathway"
+        USE_PARMED=1
+    fi
+fi
+unset _gmx_prefix
+
+[[ "$USE_PARMED" -eq 0 ]] && require_cmd amb2gro_top_gro.py
 
 if [[ "$CHARGE_METHOD" == "resp" ]]; then
     require_cmd g16
@@ -286,7 +296,7 @@ if [[ "$CHARGE_METHOD" == "resp" ]]; then
     log "RESP ESP level:          $BASIS_ESP"
     log "Gaussian resources:      nproc=$NPROC mem=$MEM"
 fi
-log "Topology pathway:        $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed (${AMBER_FF})" || echo "pdb2gmx+amb2gro" )"
+log "Topology pathway:        $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed" || echo "pdb2gmx+amb2gro" )"
 log "Output directory:        $(pwd)"
 log "Solvate/minimize:        $RUN_SOLVATE_MINIMIZE"
 
@@ -996,10 +1006,19 @@ prepare_system_parmed() {
     local parmed_gro="complex_gmx.gro"
     local tmp_ndx="parmed_tmp.ndx"
 
-    case "$AMBER_FF" in
-        ff14SB)     amber_ff_leaprc="leaprc.protein.ff14SB" ;;
-        ff99SBildn) amber_ff_leaprc="leaprc.ff99SBildn" ;;
-        *)          amber_ff_leaprc="leaprc.protein.${AMBER_FF}" ;;
+    # Map GROMACS FF names to AmberTools leaprc equivalents.
+    # Legacy FFs (ff99SBildn, ff99SB, ff96, ff99, ff03) live under oldff/.
+    case "${FF%.ff}" in
+        amber99sb-ildn) amber_ff_leaprc="oldff/leaprc.ff99SBildn" ;;
+        amber99sb)      amber_ff_leaprc="oldff/leaprc.ff99SB" ;;
+        amber03)        amber_ff_leaprc="leaprc.protein.ff03.r1" ;;
+        amber96)        amber_ff_leaprc="oldff/leaprc.ff96" ;;
+        amber99)        amber_ff_leaprc="oldff/leaprc.ff99" ;;
+        ff14SB)         amber_ff_leaprc="leaprc.protein.ff14SB" ;;
+        ff19SB)         amber_ff_leaprc="leaprc.protein.ff19SB" ;;
+        oldff/*|leaprc.*) amber_ff_leaprc="$FF" ;;
+        *)              amber_ff_leaprc="leaprc.protein.${FF%.ff}"
+            log "Warning: unrecognised FF '${FF}'; trying ${amber_ff_leaprc}" ;;
     esac
 
     case "$BOXTYPE" in
@@ -1010,7 +1029,7 @@ prepare_system_parmed() {
     # tleap uses angstroms; BOXDIST is in nm
     box_dist_a=$(python3 -c "print(${BOXDIST} * 10)")
 
-    log "Building full system with tleap (${AMBER_FF} + GAFF2 + TIP3P)"
+    log "Building full system with tleap (${FF} → ${amber_ff_leaprc} + GAFF2 + TIP3P)"
     tleap -f - <<EOF_TLEAP
 source ${amber_ff_leaprc}
 source leaprc.gaff2
@@ -1201,7 +1220,7 @@ write_summary() {
 Protein/PDB ID:        ${PROID}
 Ligand name:           ${LIGID}
 Input mode:            $( [[ "$INPUT_MODE" == "local" ]] && echo "local protein" || echo "RCSB protein" ) + $( (( LOCAL_LIGAND_GIVEN )) && echo "local ligand" || echo "RCSB ligand" )
-Topology pathway:      $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed (${AMBER_FF})" || echo "pdb2gmx+amb2gro" )
+Topology pathway:      $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed" || echo "pdb2gmx+amb2gro" )
 Force field:           ${FF}
 Water model:           ${WATER}
 Charge method:         ${CHARGE_METHOD}
