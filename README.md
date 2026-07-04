@@ -18,13 +18,29 @@ Automated pipeline for preparing protein–ligand complexes for GROMACS MD simul
 - Supports multiple charge methods: `bcc` (AM1-BCC), `resp` (Gaussian16 RESP), `abcg2`, `mul`, `cm2`, …
 - RESP: adds `nosymm` to prevent G16 geometry reorientation and grafts original coordinates back
 - Optional PDBFixer preprocessing for missing residues/atoms and protonation at chosen pH
-- Runs pdb2gmx, editconf, solvate, genion, energy minimisation
+- Two topology pathways selectable via `--ff`:
+  - **pdb2gmx + amb2gro** (default): uses GROMACS force fields (`amber99sb-ildn`, `amber99sb`, …)
+  - **tleap + parmed** (`--use-parmed`): builds the full system in tleap and converts to GROMACS; used automatically when the chosen FF has no GROMACS equivalent (e.g. `ff14SB`, `ff19SB`)
 - Generates production-ready `index.ndx` with `Protein_<LIGID>` temperature-coupling group
+
+### Force field selection
+
+A single `--ff` flag controls both pathways:
+
+| `--ff` value | GROMACS route | tleap+parmed route |
+|---|---|---|
+| `amber99sb-ildn` *(default)* | `amber99sb-ildn.ff` | `oldff/leaprc.ff99SBildn` |
+| `amber99sb` | `amber99sb.ff` | `oldff/leaprc.ff99SB` |
+| `amber03` | `amber03.ff` | `leaprc.protein.ff03.r1` |
+| `ff14SB` | *(auto-switches to parmed)* | `leaprc.protein.ff14SB` |
+| `ff19SB` | *(auto-switches to parmed)* | `leaprc.protein.ff19SB` |
+
+If `--ff` names a force field that has no GROMACS `.ff` directory, the script automatically switches to the `--use-parmed` pathway and notifies you.
 
 ### Input modes
 
 ```bash
-# 1. RCSB protein + RCSB ligand
+# 1. RCSB protein + RCSB ligand (default FF, pdb2gmx route)
 prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0
 
 # 2. RCSB protein + local ligand
@@ -34,6 +50,14 @@ prepare_complex_gmx_labready_resp.sh --pdb 3HTB --local-ligand lig.sdf --ligand 
 # 3. Local protein + local ligand (RESP with Gaussian16 optimisation)
 prepare_complex_gmx_labready_resp.sh --local-protein prot_noH.pdb --local-ligand lig.mol2 \
     --ligand LIG --charge-method resp --charge 0 --resp-opt yes
+
+# 4. tleap+parmed pathway with ff14SB (auto-detected from --ff)
+prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
+    --ff ff14SB
+
+# 5. Explicitly request parmed pathway with default FF
+prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
+    --use-parmed
 ```
 
 ### MDP templates
