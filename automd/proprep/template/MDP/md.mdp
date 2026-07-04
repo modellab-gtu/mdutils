@@ -1,4 +1,4 @@
-; Production MD - NpT ensemble, no position restraints
+; Production MD - NpT ensemble, no position restraints (GROMACS >= 2021)
 ; Run control
 integrator               = md
 tinit                    = 0
@@ -38,10 +38,10 @@ tcoupl                   = V-rescale
 tc-grps                  = Protein_ Water_and_ions
 tau_t                    = 1.0   1.0
 ref_t                    = 310   310
-; Pressure coupling
-Pcoupl                   = Parrinello-Rahman
+; Pressure coupling - C-rescale (stochastic cell rescaling)
+Pcoupl                   = C-rescale
 pcoupltype               = isotropic
-tau_p                    = 2.0
+tau_p                    = 0.5
 compressibility          = 4.5e-05
 ref_p                    = 1.0
 gen_vel                  = no
