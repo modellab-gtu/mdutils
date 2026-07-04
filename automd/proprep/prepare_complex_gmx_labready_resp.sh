@@ -54,7 +54,9 @@ BASIS_OPT="B3LYP/6-31G*"
 BASIS_ESP="HF/6-31G*"
 
 SCRIPT_START_DIR="$(pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MDPDIR="${SCRIPT_START_DIR}/MDP"
+MDPDIR_BUNDLED="${SCRIPT_DIR}/template/MDP"
 
 usage() {
 cat <<EOF_USAGE
@@ -84,8 +86,8 @@ General options:
   -w, --water NAME             Water model, default: ${WATER}
   -b, --boxtype TYPE           Box type, default: ${BOXTYPE}
   -d, --distance NM            Solvent distance in nm, default: ${BOXDIST}
-      --ions-mdp FILE          ions.mdp path, default: \$PWD/MDP/ions.mdp
-      --em-mdp FILE            em.mdp path, default: \$PWD/MDP/em.mdp
+      --ions-mdp FILE          ions.mdp path (default: MDP/ions.mdp if present, else bundled template)
+      --em-mdp FILE            em.mdp path  (default: MDP/em.mdp  if present, else bundled em_steep.mdp)
       --outdir DIR             Output directory, default: prep_<PDB>_<LIG>
       --cleanup                Remove selected intermediates
       --pdbfixer               Run PDBFixer preprocessing if available/requested
@@ -219,8 +221,20 @@ esac
 [[ "$NPROC" =~ ^[0-9]+$ ]] || die "--nproc must be a positive integer, got: $NPROC"
 
 [[ -n "$OUTDIR" ]] || OUTDIR="prep_${PROID}_${LIGID}_${CHARGE_METHOD}"
-[[ -n "$IONS_MDP" ]] || IONS_MDP="${MDPDIR}/ions.mdp"
-[[ -n "$EM_MDP"   ]] || EM_MDP="${MDPDIR}/em.mdp"
+if [[ -z "$IONS_MDP" ]]; then
+    if [[ -f "${MDPDIR}/ions.mdp" ]]; then
+        IONS_MDP="${MDPDIR}/ions.mdp"
+    else
+        IONS_MDP="${MDPDIR_BUNDLED}/ions.mdp"
+    fi
+fi
+if [[ -z "$EM_MDP" ]]; then
+    if [[ -f "${MDPDIR}/em.mdp" ]]; then
+        EM_MDP="${MDPDIR}/em.mdp"
+    else
+        EM_MDP="${MDPDIR_BUNDLED}/EM/em_steep.mdp"
+    fi
+fi
 
 for cmd in awk grep sed gmx obabel antechamber parmchk2 tleap tr sort uniq head tail wc realpath; do
     require_cmd "$cmd"
@@ -718,7 +732,7 @@ EOF_TLEAP
     cat >> "$LIG_MOL_ITP" <<EOF_POSRE
 
 ; Include Position restraint file
-#ifdef POSRES
+#ifdef POSRES_LIG
 #include "./${LIG_POSRE_ITP}"
 #endif
 EOF_POSRE
@@ -755,7 +769,7 @@ validate_topology_names() {
     [[ -s "$LIG_ATOMTYPES_ITP" ]] || die "Ligand atomtypes include is empty"
     [[ -s "$LIG_POSRE_ITP" ]]     || die "Ligand position restraint file missing: ${LIG_POSRE_ITP}"
     [[ -f "posre_protein.itp" ]]  || die "Protein position restraint file missing: posre_protein.itp"
-    grep -q '#ifdef POSRES' "$LIG_MOL_ITP" || die "Ligand mol ITP missing #ifdef POSRES block"
+    grep -q '#ifdef POSRES_LIG' "$LIG_MOL_ITP" || die "Ligand mol ITP missing #ifdef POSRES_LIG block"
 }
 
 build_final_topology() {
