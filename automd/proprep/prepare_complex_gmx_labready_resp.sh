@@ -1070,31 +1070,12 @@ EOF_NDX
     fi
     [[ -n "$lig_grp" ]] || die "Could not find ligand group in parmed index"
 
-    # genrestr writes global atom indices; for a molecule not starting at 1 (ligand),
-    # we must extract it to a temp GRO first so the output is locally 1-indexed.
-    python3 - "$parmed_gro" "$tmp_ndx" "$lig_grp" lig_only_tmp.gro <<'EOF_EXTRACT'
-import re, sys
-gro_file, ndx_file, grp_idx, out_file = sys.argv[1:5]
-grp_idx = int(grp_idx)
-with open(ndx_file) as f:
-    txt = f.read()
-groups_raw = re.split(r'\[ [^\]]+\]', txt)[1:]
-lig_atoms = list(map(int, groups_raw[grp_idx].split()))
-with open(gro_file) as f:
-    gro_lines = f.readlines()
-natoms = int(gro_lines[1].strip())
-atom_lines = gro_lines[2:2+natoms]
-box_line = gro_lines[2+natoms]
-with open(out_file, 'w') as f:
-    f.write(gro_lines[0])
-    f.write(str(len(lig_atoms)) + '\n')
-    for idx in lig_atoms:
-        f.write(atom_lines[idx-1])
-    f.write(box_line)
-EOF_EXTRACT
-    [[ -s "lig_only_tmp.gro" ]] || die "Failed to extract ligand atoms for genrestr"
-    echo "0" | gmx genrestr -f lig_only_tmp.gro -o "${LIG_POSRE_ITP}" -fc 1000 1000 1000
-    rm -f lig_only_tmp.gro
+    # Use the ligand mol2 (already available from prepare_ligand) as a standalone
+    # single-molecule file so genrestr produces local 1-based indices.
+    obabel "$AC_MOL2" -O lig_posre_tmp.pdb 2>/dev/null
+    [[ -s "lig_posre_tmp.pdb" ]] || die "obabel could not convert ligand mol2 to PDB for genrestr"
+    echo "0" | gmx genrestr -f lig_posre_tmp.pdb -o "${LIG_POSRE_ITP}" -fc 1000 1000 1000
+    rm -f lig_posre_tmp.pdb
     [[ -s "${LIG_POSRE_ITP}" ]] || die "${LIG_POSRE_ITP} was not created"
     rm -f "$tmp_ndx"
 
