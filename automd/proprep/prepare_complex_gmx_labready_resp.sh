@@ -43,6 +43,10 @@ USE_PDBFIXER=0
 PH=7.0
 RUN_SOLVATE_MINIMIZE=1
 
+# Topology pathway
+USE_PARMED=0               # 0 = pdb2gmx + amb2gro_top_gro.py  |  1 = full tleap + parmed
+AMBER_FF="ff14SB"          # AMBER protein force field for parmed pathway
+
 # Ligand charge/RESP controls
 CHARGE_METHOD="bcc"        # resp (Gaussian16) or any antechamber -c value: bcc, abcg2, mul, cm2, …
 LIG_CHARGE=0
@@ -93,6 +97,8 @@ General options:
       --pdbfixer               Run PDBFixer preprocessing if available/requested
       --ph VALUE               pH for PDBFixer hydrogen addition, default: ${PH}
       --skip-solvate-minimize  Stop after complex.gro, topol.top, and index.ndx
+      --use-parmed             Use tleap+parmed pathway instead of pdb2gmx+amb2gro
+      --amber-ff NAME          AMBER protein force field for parmed pathway, default: ${AMBER_FF}
   -h, --help                   Show this help
 
 Ligand charge options:
@@ -174,6 +180,8 @@ while [[ $# -gt 0 ]]; do
         --pdbfixer) USE_PDBFIXER=1; shift ;;
         --ph) PH="$2"; shift 2 ;;
         --skip-solvate-minimize) RUN_SOLVATE_MINIMIZE=0; shift ;;
+        --use-parmed) USE_PARMED=1; shift ;;
+        --amber-ff) AMBER_FF="$2"; shift 2 ;;
         --charge-method) CHARGE_METHOD="$(echo "$2" | tr '[:upper:]' '[:lower:]')"; shift 2 ;;
         -q|--charge) LIG_CHARGE="$2"; shift 2 ;;
         -m|--mult) LIG_MULT="$2"; shift 2 ;;
@@ -278,6 +286,7 @@ if [[ "$CHARGE_METHOD" == "resp" ]]; then
     log "RESP ESP level:          $BASIS_ESP"
     log "Gaussian resources:      nproc=$NPROC mem=$MEM"
 fi
+log "Topology pathway:        $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed (${AMBER_FF})" || echo "pdb2gmx+amb2gro" )"
 log "Output directory:        $(pwd)"
 log "Solvate/minimize:        $RUN_SOLVATE_MINIMIZE"
 
@@ -718,6 +727,12 @@ prepare_ligand() {
     parmchk2 -i "$AC_MOL2" -f mol2 -o "$AC_FRCMOD"
     [[ -s "$AC_FRCMOD" ]] || die "parmchk2 did not create $AC_FRCMOD"
 
+    if [[ "$USE_PARMED" -eq 1 ]]; then
+        LIG_MOLNAME="$LIGID"
+        log "Parmed pathway: ligand charges ready; full system will be built by tleap+parmed"
+        return 0
+    fi
+
     log "Running tleap"
     tleap -f - <<EOF_TLEAP
 source leaprc.gaff2
@@ -973,28 +988,192 @@ EOF_NDX_TC
     log "Use in MDP: tc-grps = ${tc_group} Water_and_ions"
 }
 
+prepare_system_parmed() {
+    local amber_ff_leaprc box_cmd box_dist_a
+    local complex_prmtop="complex_solv.prmtop"
+    local complex_inpcrd="complex_solv.inpcrd"
+    local parmed_top="complex_gmx.top"
+    local parmed_gro="complex_gmx.gro"
+    local tmp_ndx="parmed_tmp.ndx"
+
+    case "$AMBER_FF" in
+        ff14SB)     amber_ff_leaprc="leaprc.protein.ff14SB" ;;
+        ff99SBildn) amber_ff_leaprc="leaprc.ff99SBildn" ;;
+        *)          amber_ff_leaprc="leaprc.protein.${AMBER_FF}" ;;
+    esac
+
+    case "$BOXTYPE" in
+        dodecahedron|octahedron) box_cmd="solvateOct" ;;
+        *) box_cmd="solvateBox" ;;
+    esac
+
+    # tleap uses angstroms; BOXDIST is in nm
+    box_dist_a=$(python3 -c "print(${BOXDIST} * 10)")
+
+    log "Building full system with tleap (${AMBER_FF} + GAFF2 + TIP3P)"
+    tleap -f - <<EOF_TLEAP
+source ${amber_ff_leaprc}
+source leaprc.gaff2
+source leaprc.water.tip3p
+loadamberparams ${AC_FRCMOD}
+LIG = loadMol2 ${AC_MOL2}
+PROT = loadpdb protein.pdb
+SYSTEM = combine {PROT LIG}
+${box_cmd} SYSTEM TIP3PBOX ${box_dist_a}
+addions SYSTEM Na+ 0
+addions SYSTEM Cl- 0
+saveamberparm SYSTEM ${complex_prmtop} ${complex_inpcrd}
+quit
+EOF_TLEAP
+    [[ -s "$complex_prmtop" ]] || die "tleap did not produce ${complex_prmtop}"
+    [[ -s "$complex_inpcrd" ]] || die "tleap did not produce ${complex_inpcrd}"
+
+    log "Converting full system AMBER → GROMACS with parmed"
+    python3 - <<EOF_PARMED
+from parmed import load_file
+
+amber = load_file('${complex_prmtop}', '${complex_inpcrd}')
+
+for res in amber.residues:
+    rn = res.name.strip()
+    if rn in ('WAT', 'HOH'):
+        res.name = 'SOL'
+    elif rn in ('Na+', 'NA+', 'Na'):
+        res.name = 'NA'
+    elif rn in ('Cl-', 'CL-', 'Cl'):
+        res.name = 'CL'
+
+amber.save('${parmed_top}', format='gromacs', overwrite=True)
+amber.save('${parmed_gro}', overwrite=True)
+print('parmed conversion complete')
+EOF_PARMED
+    [[ -s "$parmed_top" ]] || die "parmed did not produce ${parmed_top}"
+    [[ -s "$parmed_gro" ]] || die "parmed did not produce ${parmed_gro}"
+
+    # Generate position restraints via make_ndx + genrestr
+    log "Generating position restraints"
+    gmx make_ndx -f "$parmed_gro" -o "$tmp_ndx" <<EOF_NDX
+q
+EOF_NDX
+    [[ -s "$tmp_ndx" ]] || die "make_ndx did not produce ${tmp_ndx}"
+
+    local prot_grp lig_grp
+    prot_grp=$(awk 'BEGIN{i=-1}/^\[/{i++;n=$0;gsub(/^\[ */,"",n);gsub(/ *\]$/,"",n);if(n=="Protein"){print i;exit}}' "$tmp_ndx")
+    [[ -n "$prot_grp" ]] || die "Could not find Protein group in parmed index"
+    echo "$prot_grp" | gmx genrestr -f "$parmed_gro" -n "$tmp_ndx" -o posre_protein.itp -fc 1000 1000 1000
+    [[ -s "posre_protein.itp" ]] || die "posre_protein.itp was not created"
+
+    lig_grp=$(awk -v lig="${LIGID}" 'BEGIN{i=-1}/^\[/{i++;n=$0;gsub(/^\[ */,"",n);gsub(/ *\]$/,"",n);if(n==lig){print i;exit}}' "$tmp_ndx")
+    if [[ -z "$lig_grp" ]]; then
+        log "Warning: ligand group ${LIGID} not found, trying 'Other'"
+        lig_grp=$(awk 'BEGIN{i=-1}/^\[/{i++;n=$0;gsub(/^\[ */,"",n);gsub(/ *\]$/,"",n);if(n=="Other"){print i;exit}}' "$tmp_ndx")
+    fi
+    [[ -n "$lig_grp" ]] || die "Could not find ligand group in parmed index"
+    echo "$lig_grp" | gmx genrestr -f "$parmed_gro" -n "$tmp_ndx" -o "${LIG_POSRE_ITP}" -fc 1000 1000 1000
+    [[ -s "${LIG_POSRE_ITP}" ]] || die "${LIG_POSRE_ITP} was not created"
+    rm -f "$tmp_ndx"
+
+    # Inject #ifdef POSRES / POSRES_LIG / POSRES_WATER blocks into the topology
+    log "Injecting POSRES directives into ${parmed_top}"
+    python3 - "$parmed_top" "$LIGID" "posre_protein.itp" "$LIG_POSRE_ITP" <<'EOF_INJECT'
+import re, sys
+
+top_file, lig_name, posre_prot, posre_lig = sys.argv[1:5]
+
+with open(top_file) as f:
+    lines = f.readlines()
+
+result = []
+i = 0
+mol_idx = 0       # 1-based count of moleculetype sections seen
+current_mol = None
+
+def posres_block(kind, include=None):
+    if kind == 'protein':
+        return ['\n#ifdef POSRES\n', f'#include "./{posre_prot}"\n', '#endif\n\n']
+    elif kind == 'lig':
+        return ['\n#ifdef POSRES_LIG\n', f'#include "./{posre_lig}"\n', '#endif\n\n']
+    elif kind == 'water':
+        return ['\n#ifdef POSRES_WATER\n',
+                '; Position restraint for each water oxygen\n',
+                '[ position_restraints ]\n',
+                ';  i funct       fcx        fcy        fcz\n',
+                '   1    1       1000       1000       1000\n',
+                '#endif\n\n']
+    return []
+
+while i < len(lines):
+    line = lines[i]
+    new_section = re.match(r'^\[ *(moleculetype|system)', line)
+
+    if new_section and current_mol is not None:
+        if mol_idx == 1:
+            result.extend(posres_block('protein'))
+        elif current_mol == lig_name:
+            result.extend(posres_block('lig'))
+        elif current_mol == 'SOL':
+            result.extend(posres_block('water'))
+        current_mol = None
+
+    result.append(line)
+
+    if re.match(r'^\[ *moleculetype', line):
+        mol_idx += 1
+        i += 1
+        while i < len(lines):
+            result.append(lines[i])
+            s = lines[i].strip()
+            if s and not s.startswith(';'):
+                current_mol = s.split()[0]
+                i += 1
+                break
+            i += 1
+        continue
+
+    i += 1
+
+with open(top_file, 'w') as f:
+    f.writelines(result)
+print(f'POSRES injected (mol_idx=1 → protein, {lig_name} → POSRES_LIG, SOL → POSRES_WATER)')
+EOF_INJECT
+    [[ $? -eq 0 ]] || die "POSRES injection into parmed topology failed"
+
+    FINAL_TOP="$parmed_top"
+    COMPLEX_GRO="$parmed_gro"
+
+    generate_tc_index_after_ions "$COMPLEX_GRO"
+}
+
 solvate_and_minimize() {
     if [[ "$RUN_SOLVATE_MINIMIZE" -eq 0 ]]; then
         log "Skipping solvation, ionization, and minimization by request"
         return 0
     fi
 
-    log "Creating box"
-    gmx editconf -f "$COMPLEX_GRO" -o newbox.gro -bt "$BOXTYPE" -d "$BOXDIST"
+    local em_coord
 
-    log "Solvating"
-    gmx solvate -cp newbox.gro -cs spc216.gro -p "$FINAL_TOP" -o solv.gro
+    if [[ "$USE_PARMED" -eq 0 ]]; then
+        log "Creating box"
+        gmx editconf -f "$COMPLEX_GRO" -o newbox.gro -bt "$BOXTYPE" -d "$BOXDIST"
 
-    log "Preparing ions"
-    gmx grompp -f "$IONS_MDP" -c solv.gro -r solv.gro -p "$FINAL_TOP" -o ions.tpr -maxwarn 1
+        log "Solvating"
+        gmx solvate -cp newbox.gro -cs spc216.gro -p "$FINAL_TOP" -o solv.gro
 
-    log "Adding ions"
-    echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" -pname NA -nname CL -neutral
+        log "Preparing ions"
+        gmx grompp -f "$IONS_MDP" -c solv.gro -r solv.gro -p "$FINAL_TOP" -o ions.tpr -maxwarn 1
 
-    generate_tc_index_after_ions "solv_ions.gro"
+        log "Adding ions"
+        echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" -pname NA -nname CL -neutral
+
+        generate_tc_index_after_ions "solv_ions.gro"
+        em_coord="solv_ions.gro"
+    else
+        # parmed pathway: tleap already solvated and added ions; index already built
+        em_coord="$COMPLEX_GRO"
+    fi
 
     log "Preparing minimization"
-    gmx grompp -f "$EM_MDP" -c solv_ions.gro -r solv_ions.gro -p "$FINAL_TOP" -o em.tpr
+    gmx grompp -f "$EM_MDP" -c "$em_coord" -r "$em_coord" -p "$FINAL_TOP" -o em.tpr
 
     log "Running minimization"
     gmx mdrun -v -deffnm em
@@ -1016,6 +1195,7 @@ write_summary() {
 Protein/PDB ID:        ${PROID}
 Ligand name:           ${LIGID}
 Input mode:            $( [[ "$INPUT_MODE" == "local" ]] && echo "local protein" || echo "RCSB protein" ) + $( (( LOCAL_LIGAND_GIVEN )) && echo "local ligand" || echo "RCSB ligand" )
+Topology pathway:      $( [[ "$USE_PARMED" -eq 1 ]] && echo "tleap+parmed (${AMBER_FF})" || echo "pdb2gmx+amb2gro" )
 Force field:           ${FF}
 Water model:           ${WATER}
 Charge method:         ${CHARGE_METHOD}
@@ -1034,12 +1214,19 @@ download_pdb
 maybe_run_pdbfixer
 detect_ligand_sites
 extract_coordinates
-prepare_protein
-prepare_ligand
-validate_topology_names
-build_final_topology
-merge_gro_files
-generate_index
+
+if [[ "$USE_PARMED" -eq 0 ]]; then
+    prepare_protein
+    prepare_ligand
+    validate_topology_names
+    build_final_topology
+    merge_gro_files
+    generate_index
+else
+    prepare_ligand           # charges only: antechamber/resp + parmchk2
+    prepare_system_parmed    # full system: tleap + parmed + POSRES + index
+fi
+
 solvate_and_minimize
 cleanup_files
 write_summary
