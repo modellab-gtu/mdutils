@@ -44,33 +44,57 @@ info "Step 5: installing AmberTools (latest available on conda-forge)"
 # ── Verify ────────────────────────────────────────────────────────────────────
 info "Verifying installation"
 
-CONDA_PREFIX="$("$CONDA_CMD" info --json | python3 -c "
-import sys, json
-envs = json.load(sys.stdin)['envs']
-for e in envs:
-    if e.endswith('${ENV_NAME}'):
-        print(e); break
-")"
-
+CONDA_PREFIX="$("$CONDA_CMD" env list | awk -v env="$ENV_NAME" '$1 == env {print $NF}')"
 [[ -n "$CONDA_PREFIX" ]] || die "Could not locate environment prefix for '${ENV_NAME}'"
 
-check() {
-    local cmd="$1"
-    if "$CONDA_PREFIX/bin/$cmd" --version &>/dev/null 2>&1; then
-        echo "  [OK] $cmd $("$CONDA_PREFIX/bin/$cmd" --version 2>&1 | head -1)"
-    else
-        echo "  [WARN] $cmd not found or failed"
-    fi
-}
+BIN="$CONDA_PREFIX/bin"
+PY="$BIN/python"
 
-check obabel
-"$CONDA_PREFIX/bin/python" -c "import pdbfixer; print('  [OK] pdbfixer', pdbfixer.__version__)" 2>/dev/null \
-    || echo "  [WARN] pdbfixer import failed"
-check gmx
-check antechamber
-check tleap
-check parmchk2
-"$CONDA_PREFIX/bin/python" -c "import parmed; print('  [OK] parmed (amb2gro_top_gro.py dependency)', parmed.__version__)" 2>/dev/null \
-    || echo "  [WARN] parmed import failed"
+ok()   { echo "  [OK]   $*"; }
+warn() { echo "  [WARN] $*"; }
+
+# obabel: version flag is -V (capital V)
+if [[ -x "$BIN/obabel" ]]; then
+    ok "obabel $("$BIN/obabel" -V 2>&1 | head -1)"
+else
+    warn "obabel not found"
+fi
+
+# pdbfixer: no __version__; check openmm version instead
+if "$PY" -c "import pdbfixer, openmm; print('pdbfixer OK, openmm', openmm.__version__)" 2>/dev/null | grep -q OK; then
+    ok "$("$PY" -c "import pdbfixer, openmm; print('pdbfixer + openmm', openmm.__version__)" 2>/dev/null)"
+else
+    warn "pdbfixer or openmm import failed"
+fi
+
+# gmx
+if [[ -x "$BIN/gmx" ]]; then
+    ok "$("$BIN/gmx" --version 2>&1 | grep 'GROMACS version' | xargs)"
+else
+    warn "gmx not found"
+fi
+
+# AmberTools binaries exit non-zero on -h, so just check they exist
+for cmd in antechamber parmchk2 tleap amb2gro_top_gro.py; do
+    if [[ -x "$BIN/$cmd" ]]; then
+        ok "$cmd"
+    else
+        warn "$cmd not found"
+    fi
+done
+
+# parmed Python library (used by amb2gro_top_gro.py)
+if ver="$("$PY" -c "import parmed; print(parmed.__version__)" 2>/dev/null)"; then
+    ok "parmed $ver"
+else
+    warn "parmed import failed"
+fi
+
+# numpy sanity check (catches broken installations like missing __init__.py)
+if ver="$("$PY" -c "import numpy; print(numpy.__version__)" 2>/dev/null)"; then
+    ok "numpy $ver"
+else
+    warn "numpy import failed — environment may be corrupted"
+fi
 
 info "Done. Activate with:  conda activate ${ENV_NAME}"
