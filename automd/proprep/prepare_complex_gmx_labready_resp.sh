@@ -512,6 +512,19 @@ prepare_protein() {
     [[ -s "$PROTEIN_ITP" ]] || die "Protein include file not created"
     grep -q '^\[ *moleculetype' "$PROTEIN_ITP" || die "Protein ITP extraction failed: missing [ moleculetype ]"
 
+    # GROMACS 2024+ places water/ion #includes before [ system ] so they land in
+    # the extracted ITP. Strip them out — topol.top owns those includes.
+    python3 - "$PROTEIN_ITP" <<'EOF_STRIP'
+import re, sys
+with open(sys.argv[1]) as f:
+    txt = f.read()
+txt = re.sub(r';[^\n]*[Ii]nclude water[^\n]*\n#include[^\n]*\n', '', txt)
+txt = re.sub(r'#ifdef POSRES_WATER.*?#endif\n?', '', txt, flags=re.DOTALL)
+txt = re.sub(r';[^\n]*[Ii]nclude[^\n]*ions[^\n]*\n#include[^\n]*ions\.itp[^\n]*\n', '', txt)
+with open(sys.argv[1], 'w') as f:
+    f.write(txt)
+EOF_STRIP
+
     log "Detecting protein molecule names from [ molecules ] in ${PROTEIN_TOP}"
     mapfile -t PROTEIN_MOLNAMES < <(
         awk '
