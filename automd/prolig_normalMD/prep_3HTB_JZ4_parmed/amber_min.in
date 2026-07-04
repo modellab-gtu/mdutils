@@ -1,0 +1,14 @@
+Minimization - steepest descent then CG, heavy atoms restrained
+ &cntrl
+  imin         = 1,
+  ntmin        = 1,
+  maxcyc       = 10000,
+  ncyc         = 5000,
+  ntpr         = 100,
+  ntwx         = 0,
+  cut          = 12.0,
+  ntb          = 1,
+  ntr          = 1,
+  restraint_wt = 10.0,
+  restraintmask = '!(:WAT,Na+,Cl-)',
+ /

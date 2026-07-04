@@ -1,0 +1,15 @@
+Protein/PDB ID:        3HTB
+Ligand name:           JZ4
+Input mode:            RCSB protein + RCSB ligand
+Topology pathway:      tleap+parmed
+Force field:           ff14SB
+Water model:           tip3p
+Charge method:         bcc
+Ligand charge:         0
+Ligand multiplicity:   1
+RESP optimization:     yes
+Final topology:        complex_gmx.top
+Complex coordinates:   complex_gmx.gro
+Index file:            index.ndx
+Production tc-grps:    Protein_JZ4 Water_and_ions
+Log file:              prepare_3HTB_JZ4_bcc.log

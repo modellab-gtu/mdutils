@@ -1,0 +1,32 @@
+Protein/PDB ID:        3HTB
+Ligand name:           JZ4
+Input mode:            RCSB protein + RCSB ligand
+Topology pathway:      tleap+parmed
+Force field:           amber99sb-ildn
+Water model:           tip3p
+Charge method:         bcc
+Ligand charge:         0
+Ligand multiplicity:   1
+RESP optimization:     yes
+
+--- GROMACS output ---
+Final topology:        complex_gmx.top
+Complex coordinates:   complex_gmx.gro
+Index file:            index.ndx
+Production tc-grps:    Protein_JZ4 Water_and_ions
+
+--- AMBER output ---
+Topology (prmtop):     complex_solv.prmtop
+Coordinates (inpcrd):  complex_solv.inpcrd
+Minimization input:    amber_min.in
+NVT input:             amber_nvt.in
+NPT input:             amber_npt.in
+Production MD input:   amber_md.in
+
+Example run (pmemd.cuda):
+  pmemd.cuda -O -i amber_min.in -p complex_solv.prmtop -c complex_solv.inpcrd -o min.out -r min.rst -x min.nc
+  pmemd.cuda -O -i amber_nvt.in -p complex_solv.prmtop -c min.rst              -o nvt.out -r nvt.rst -x nvt.nc
+  pmemd.cuda -O -i amber_npt.in -p complex_solv.prmtop -c nvt.rst              -o npt.out -r npt.rst -x npt.nc
+  pmemd.cuda -O -i amber_md.in  -p complex_solv.prmtop -c npt.rst              -o md.out  -r md.rst  -x md.nc
+
+Log file:              prepare_3HTB_JZ4_bcc.log

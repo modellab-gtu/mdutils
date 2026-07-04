@@ -6,7 +6,7 @@ Automated pipelines for classical and alchemical MD simulations of protein–lig
 
 ## Aim 1 — Protein + Ligand + Solvent Classical MD (proprep)
 
-**Directory:** `automd/proprep/`
+**Directory:** `automd/prolig_normalMD/`
 
 **Status:** Nearly complete.
 
@@ -41,7 +41,7 @@ Pipeline for preparing a solvated ligand-only system and running classical MD �
 
 ## Aim 3 — Protein + Ligand + Solvent Alchemical Free Energy (complex leg)
 
-**Directory:** `automd/proprep/` *(to be extended)*
+**Directory:** `automd/prolig_normalMD/` *(to be extended)*
 
 **Status:** Planned.
 

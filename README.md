@@ -5,11 +5,11 @@ developed at the Molecular Modeling Lab, Gebze Technical University.
 
 ---
 
-## automd/proprep — Protein–Ligand GROMACS Preparation
+## automd/prolig_normalMD — Protein–Ligand Classical MD Preparation
 
-Automated pipeline for preparing protein–ligand complexes for GROMACS MD simulations.
+Automated pipeline for preparing protein–ligand complexes for classical MD simulations in GROMACS or AMBER.
 
-**Script:** `automd/proprep/prepare_complex_gmx_labready_resp.sh`
+**Script:** `automd/prolig_normalMD/prepare_prolig_md.sh`
 
 ### Features
 
@@ -41,22 +41,22 @@ If `--ff` names a force field that has no GROMACS `.ff` directory, the script au
 
 ```bash
 # 1. RCSB protein + RCSB ligand (default FF, pdb2gmx route)
-prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0
+prepare_prolig_md.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0
 
 # 2. RCSB protein + local ligand
-prepare_complex_gmx_labready_resp.sh --pdb 3HTB --local-ligand lig.sdf --ligand JZ4 \
+prepare_prolig_md.sh --pdb 3HTB --local-ligand lig.sdf --ligand JZ4 \
     --charge-method bcc --charge 0
 
 # 3. Local protein + local ligand (RESP with Gaussian16 optimisation)
-prepare_complex_gmx_labready_resp.sh --local-protein prot_noH.pdb --local-ligand lig.mol2 \
+prepare_prolig_md.sh --local-protein prot_noH.pdb --local-ligand lig.mol2 \
     --ligand LIG --charge-method resp --charge 0 --resp-opt yes
 
 # 4. tleap+parmed pathway with ff14SB (auto-detected from --ff)
-prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
+prepare_prolig_md.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
     --ff ff14SB
 
 # 5. Explicitly request parmed pathway with default FF
-prepare_complex_gmx_labready_resp.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
+prepare_prolig_md.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
     --use-parmed
 ```
 
