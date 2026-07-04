@@ -35,11 +35,9 @@ info "Step 4: installing GROMACS"
     --channel conda-forge --override-channels
 
 # ── 5. AmberTools ─────────────────────────────────────────────────────────────
-# conda-forge currently ships AmberTools 24.8 (the latest stable build).
-# AmberTools 25 will appear on conda-forge when it is packaged upstream.
-info "Step 5: installing AmberTools (latest available on conda-forge)"
-"$CONDA_CMD" install -y -n "$ENV_NAME" ambertools \
-    --channel conda-forge --override-channels
+info "Step 5: installing AmberTools 25 (dacase channel)"
+"$CONDA_CMD" install -y -n "$ENV_NAME" ambertools-dac=25 \
+    --channel dacase --channel conda-forge
 
 # ── Verify ────────────────────────────────────────────────────────────────────
 info "Verifying installation"

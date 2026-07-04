@@ -155,7 +155,7 @@ See [INSTALL.md](INSTALL.md) for step-by-step instructions and GPU GROMACS notes
 | OpenMM | 8.5.2 |
 | PDBFixer | 1.12 |
 | GROMACS | 2025.4 |
-| AmberTools | 24.8 |
+| AmberTools | 25 |
 | parmed | 4.3.1 |
 | numpy | 2.5.0 |
 
