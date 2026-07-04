@@ -1,20 +1,20 @@
-define      = -DPOSRES -DPOSRES_LIG ; position restrain the protein and ligand
+; NVT equilibration - velocity rescaling thermostat, position restraints on
+define                   = -DPOSRES -DPOSRES_LIG
 ; Run control
-integrator               = md       ;leap-frog integrator 
+integrator               = md
 tinit                    = 0
 dt                       = 0.002
-nsteps                   = 500000    ; 1000 ps
+nsteps                   = 500000              ; 1 ns
+nstcomm                  = 100
 ; Output control
-nstxout			 = 1000
-nstvout			 = 1000
+nstxout                  = 1000
+nstvout                  = 1000
 nstlog                   = 1000
 nstenergy                = 1000
-; Neighborsearching and short-range nonbonded interactions
+; Neighborsearching and nonbonded interactions
 cutoff-scheme            = verlet
 nstlist                  = 20
-ns_type                  = grid
 pbc                      = xyz
-rlist                    = 1.2
 ; Electrostatics
 coulombtype              = PME
 rcoulomb                 = 1.2
@@ -23,27 +23,27 @@ vdwtype                  = cutoff
 vdw-modifier             = Force-switch
 rvdw-switch              = 1.0
 rvdw                     = 1.2
-; Apply long range dispersion corrections for Energy and Pressure
-DispCorr                  = EnerPres
-; Spacing for the PME/PPPM FFT grid
+; Dispersion correction
+DispCorr                 = EnerPres
+; PME parameters
 fourierspacing           = 0.16
-; EWALD/PME/PPPM parameters
 pme_order                = 4
 ewald_rtol               = 1e-05
 epsilon_surface          = 0
 ; Temperature coupling
-; tcoupl is implicitly handled by the sd integrator
 tcoupl                   = V-rescale
-tc-grps     = Protein_ Water_and_ions 
+; Replace "Protein_" with your actual ligand name (e.g. Protein_LIG) — see prep script output
+tc-grps                  = Protein_ Water_and_ions
 tau_t                    = 1.0   1.0
 ref_t                    = 310   310
-; Pressure coupling is off for NVT
+; Pressure coupling off for NVT
 Pcoupl                   = No
 gen_vel                  = yes
 gen_temp                 = 310
-gen_seed                 = -1 
-constraints              = h-bonds  
+gen_seed                 = -1
+; Constraints
+constraints              = h-bonds
 constraint-algorithm     = lincs
-continuation             = no 
+continuation             = no
 lincs-order              = 4
 lincs-iter               = 1

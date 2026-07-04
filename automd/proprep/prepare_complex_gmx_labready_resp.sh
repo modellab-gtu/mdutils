@@ -87,7 +87,7 @@ General options:
   -b, --boxtype TYPE           Box type, default: ${BOXTYPE}
   -d, --distance NM            Solvent distance in nm, default: ${BOXDIST}
       --ions-mdp FILE          ions.mdp path (default: MDP/ions.mdp if present, else bundled template)
-      --em-mdp FILE            em.mdp path  (default: MDP/em.mdp  if present, else bundled em_steep.mdp)
+      --em-mdp FILE            em.mdp path  (default: MDP/em.mdp  if present, else bundled template)
       --outdir DIR             Output directory, default: prep_<PDB>_<LIG>
       --cleanup                Remove selected intermediates
       --pdbfixer               Run PDBFixer preprocessing if available/requested
@@ -232,7 +232,7 @@ if [[ -z "$EM_MDP" ]]; then
     if [[ -f "${MDPDIR}/em.mdp" ]]; then
         EM_MDP="${MDPDIR}/em.mdp"
     else
-        EM_MDP="${MDPDIR_BUNDLED}/EM/em_steep.mdp"
+        EM_MDP="${MDPDIR_BUNDLED}/em.mdp"
     fi
 fi
 
