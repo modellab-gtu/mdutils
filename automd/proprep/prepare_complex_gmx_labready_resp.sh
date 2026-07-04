@@ -1204,6 +1204,108 @@ solvate_and_minimize() {
     gmx mdrun -v -deffnm em
 }
 
+write_amber_inputs() {
+    log "Writing AMBER MD input files"
+
+    cat > amber_min.in <<'EOF_MIN'
+Minimization - steepest descent then CG, heavy atoms restrained
+ &cntrl
+  imin         = 1,
+  ntmin        = 1,
+  maxcyc       = 10000,
+  ncyc         = 5000,
+  ntpr         = 100,
+  ntwx         = 0,
+  cut          = 12.0,
+  ntb          = 1,
+  ntr          = 1,
+  restraint_wt = 10.0,
+  restraintmask = '!(:WAT,Na+,Cl-)',
+ /
+EOF_MIN
+
+    cat > amber_nvt.in <<'EOF_NVT'
+NVT equilibration - Langevin dynamics, position restraints on (1 ns)
+ &cntrl
+  imin         = 0,
+  irest        = 0,
+  ntx          = 1,
+  nstlim       = 500000,
+  dt           = 0.002,
+  ntf          = 2,
+  ntc          = 2,
+  cut          = 12.0,
+  ntb          = 1,
+  ntt          = 3,
+  gamma_ln     = 1.0,
+  temp0        = 310.0,
+  tempi        = 310.0,
+  ntpr         = 1000,
+  ntwx         = 5000,
+  ntwr         = 5000,
+  iwrap        = 1,
+  ntr          = 1,
+  restraint_wt = 10.0,
+  restraintmask = '!(:WAT,Na+,Cl-)',
+ /
+EOF_NVT
+
+    cat > amber_npt.in <<'EOF_NPT'
+NPT equilibration - Langevin dynamics + MC barostat, position restraints on (1 ns)
+ &cntrl
+  imin         = 0,
+  irest        = 1,
+  ntx          = 5,
+  nstlim       = 500000,
+  dt           = 0.002,
+  ntf          = 2,
+  ntc          = 2,
+  cut          = 12.0,
+  ntb          = 2,
+  ntt          = 3,
+  gamma_ln     = 1.0,
+  temp0        = 310.0,
+  ntp          = 1,
+  barostat     = 2,
+  pres0        = 1.01325,
+  mcbarint     = 100,
+  ntpr         = 1000,
+  ntwx         = 5000,
+  ntwr         = 5000,
+  iwrap        = 1,
+  ntr          = 1,
+  restraint_wt = 10.0,
+  restraintmask = '!(:WAT,Na+,Cl-)',
+ /
+EOF_NPT
+
+    cat > amber_md.in <<'EOF_MD'
+Production MD - Langevin dynamics + MC barostat, no restraints (100 ns)
+ &cntrl
+  imin         = 0,
+  irest        = 1,
+  ntx          = 5,
+  nstlim       = 50000000,
+  dt           = 0.002,
+  ntf          = 2,
+  ntc          = 2,
+  cut          = 12.0,
+  ntb          = 2,
+  ntt          = 3,
+  gamma_ln     = 1.0,
+  temp0        = 310.0,
+  ntp          = 1,
+  barostat     = 2,
+  pres0        = 1.01325,
+  mcbarint     = 100,
+  ntpr         = 5000,
+  ntwx         = 5000,
+  ntwr         = 25000,
+  iwrap        = 1,
+ /
+EOF_MD
+}
+
 cleanup_files() {
     [[ "$KEEP" -eq 1 ]] && return 0
     log "Cleaning intermediates"
@@ -1216,7 +1318,8 @@ cleanup_files() {
 
 write_summary() {
     log "Writing preparation summary"
-    cat > preparation_summary.txt <<EOF_SUMMARY
+    {
+        cat <<EOF_SUMMARY
 Protein/PDB ID:        ${PROID}
 Ligand name:           ${LIGID}
 Input mode:            $( [[ "$INPUT_MODE" == "local" ]] && echo "local protein" || echo "RCSB protein" ) + $( (( LOCAL_LIGAND_GIVEN )) && echo "local ligand" || echo "RCSB ligand" )
@@ -1227,12 +1330,34 @@ Charge method:         ${CHARGE_METHOD}
 Ligand charge:         ${LIG_CHARGE}
 Ligand multiplicity:   ${LIG_MULT}
 RESP optimization:     ${RESP_OPT}
+
+--- GROMACS output ---
 Final topology:        ${FINAL_TOP}
 Complex coordinates:   ${COMPLEX_GRO}
 Index file:            ${INDEX_NDX}
 Production tc-grps:    Protein_${LIGID} Water_and_ions
-Log file:              ${LOGFILE}
 EOF_SUMMARY
+        if [[ "$USE_PARMED" -eq 1 ]]; then
+            cat <<EOF_AMBER
+
+--- AMBER output ---
+Topology (prmtop):     complex_solv.prmtop
+Coordinates (inpcrd):  complex_solv.inpcrd
+Minimization input:    amber_min.in
+NVT input:             amber_nvt.in
+NPT input:             amber_npt.in
+Production MD input:   amber_md.in
+
+Example run (pmemd.cuda):
+  pmemd.cuda -O -i amber_min.in -p complex_solv.prmtop -c complex_solv.inpcrd -ref complex_solv.inpcrd -o min.out -r min.rst -x min.nc
+  pmemd.cuda -O -i amber_nvt.in -p complex_solv.prmtop -c min.rst              -ref complex_solv.inpcrd -o nvt.out -r nvt.rst -x nvt.nc
+  pmemd.cuda -O -i amber_npt.in -p complex_solv.prmtop -c nvt.rst              -ref complex_solv.inpcrd -o npt.out -r npt.rst -x npt.nc
+  pmemd.cuda -O -i amber_md.in  -p complex_solv.prmtop -c npt.rst                                       -o md.out  -r md.rst  -x md.nc
+EOF_AMBER
+        fi
+        echo
+        echo "Log file:              ${LOGFILE}"
+    } > preparation_summary.txt
 }
 
 download_pdb
@@ -1250,6 +1375,7 @@ if [[ "$USE_PARMED" -eq 0 ]]; then
 else
     prepare_ligand           # charges only: antechamber/resp + parmchk2
     prepare_system_parmed    # full system: tleap + parmed + POSRES + index
+    write_amber_inputs
 fi
 
 solvate_and_minimize
