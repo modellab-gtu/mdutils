@@ -1,0 +1,4 @@
+# Test and run output directories
+prep_*/
+test_*/
+run*.log
