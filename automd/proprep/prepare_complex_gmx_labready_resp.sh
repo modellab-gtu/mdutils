@@ -27,7 +27,8 @@ LIGID="JZ4"
 LIGID_USER_SET=0
 LOCAL_PROTEIN_PDB=""
 LOCAL_LIGAND_PDB=""
-INPUT_MODE="rcsb"
+LOCAL_LIGAND_GIVEN=0   # set when --local-ligand is given (independent of protein source)
+INPUT_MODE="rcsb"      # rcsb = download protein; local = use --local-protein
 LIGCHAIN=""
 LIGRESI=""
 FF="amber99sb-ildn"
@@ -43,7 +44,7 @@ PH=7.0
 RUN_SOLVATE_MINIMIZE=1
 
 # Ligand charge/RESP controls
-CHARGE_METHOD="bcc"        # bcc or resp
+CHARGE_METHOD="bcc"        # resp (Gaussian16) or any antechamber -c value: bcc, abcg2, mul, cm2, …
 LIG_CHARGE=0
 LIG_MULT=1
 RESP_OPT="yes"             # yes or no
@@ -61,10 +62,14 @@ Usage:
   $(basename "$0") [options]
 
 Input modes:
-  RCSB mode:
+  1) RCSB protein + RCSB ligand (default):
     $(basename "$0") --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0
 
-  Local mode:
+  2) RCSB protein + local ligand:
+    $(basename "$0") --pdb 3HTB --local-ligand lig.pdb --ligand JZ4 \\
+      --charge-method resp --charge 0
+
+  3) Local protein + local ligand:
     $(basename "$0") --local-protein prot_noH.pdb --local-ligand lig.pdb \\
       --ligand LIG --charge-method resp --charge 0 --resp-opt yes
 
@@ -89,7 +94,8 @@ General options:
   -h, --help                   Show this help
 
 Ligand charge options:
-      --charge-method METHOD   bcc or resp, default: ${CHARGE_METHOD}
+      --charge-method METHOD   resp (Gaussian16 RESP) or any antechamber -c value
+                               (bcc, abcg2, mul, cm2, …), default: ${CHARGE_METHOD}
   -q, --charge INT             Net ligand charge, default: ${LIG_CHARGE}
   -m, --mult INT               Spin multiplicity for RESP/Gaussian, default: ${LIG_MULT}
       --resp-opt yes|no        For RESP: optimize with G16 before ESP, default: ${RESP_OPT}
@@ -152,7 +158,7 @@ while [[ $# -gt 0 ]]; do
         -p|--pdb) PROID="$2"; shift 2 ;;
         -l|--ligand) LIGID="$2"; LIGID_USER_SET=1; shift 2 ;;
         --local-protein) LOCAL_PROTEIN_PDB="$2"; INPUT_MODE="local"; shift 2 ;;
-        --local-ligand) LOCAL_LIGAND_PDB="$2"; INPUT_MODE="local"; shift 2 ;;
+        --local-ligand)  LOCAL_LIGAND_PDB="$2"; LOCAL_LIGAND_GIVEN=1; shift 2 ;;
         --lig-chain) LIGCHAIN="$2"; shift 2 ;;
         --lig-resi) LIGRESI="$2"; shift 2 ;;
         -f|--ff) FF="$2"; shift 2 ;;
@@ -179,25 +185,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Validate and resolve input sources ───────────────────────────────────────
+# Three supported scenarios:
+#   1. RCSB protein + RCSB ligand  : (default, --pdb --ligand)
+#   2. RCSB protein + local ligand : --pdb + --local-ligand --ligand
+#   3. Local protein + local ligand: --local-protein + --local-ligand --ligand
+
 if [[ "$INPUT_MODE" == "local" ]]; then
-    [[ -n "$LOCAL_PROTEIN_PDB" && -n "$LOCAL_LIGAND_PDB" ]] || die "Local mode requires both --local-protein and --local-ligand"
-    [[ -f "$LOCAL_PROTEIN_PDB" ]] || die "Local protein PDB not found: $LOCAL_PROTEIN_PDB"
-    [[ -f "$LOCAL_LIGAND_PDB"  ]] || die "Local ligand PDB not found: $LOCAL_LIGAND_PDB"
-
-    # Important: absolute paths are required because the script later cd's into OUTDIR.
+    [[ -n "$LOCAL_PROTEIN_PDB" ]] || die "Local protein mode requires --local-protein"
+    [[ -f "$LOCAL_PROTEIN_PDB" ]] || die "Local protein file not found: $LOCAL_PROTEIN_PDB"
     LOCAL_PROTEIN_PDB="$(realpath "$LOCAL_PROTEIN_PDB")"
-    LOCAL_LIGAND_PDB="$(realpath "$LOCAL_LIGAND_PDB")"
-
-    PROID="PROT"
-    if [[ "$LIGID_USER_SET" -eq 0 ]]; then
-        LIGID="LIG"
-    fi
+    [[ "$LIGID_USER_SET" -eq 0 ]] && PROID="PROT"
 fi
 
-case "$CHARGE_METHOD" in
-    bcc|resp) ;;
-    *) die "--charge-method must be bcc or resp" ;;
-esac
+if (( LOCAL_LIGAND_GIVEN )); then
+    [[ -n "$LOCAL_LIGAND_PDB" ]] || die "--local-ligand requires a file path"
+    [[ -f "$LOCAL_LIGAND_PDB"  ]] || die "Local ligand file not found: $LOCAL_LIGAND_PDB"
+    LOCAL_LIGAND_PDB="$(realpath "$LOCAL_LIGAND_PDB")"
+    [[ "$LIGID_USER_SET" -eq 1 ]] || die "--local-ligand requires --ligand RESNAME to set the molecule ID"
+fi
+
+if [[ "$INPUT_MODE" == "local" ]] && ! (( LOCAL_LIGAND_GIVEN )); then
+    die "Local protein mode also requires --local-ligand (and --ligand RESNAME)"
+fi
 
 case "$RESP_OPT" in
     yes|y|no|n) ;;
@@ -212,9 +222,10 @@ esac
 [[ -n "$IONS_MDP" ]] || IONS_MDP="${MDPDIR}/ions.mdp"
 [[ -n "$EM_MDP"   ]] || EM_MDP="${MDPDIR}/em.mdp"
 
-for cmd in wget awk grep sed gmx obabel antechamber parmchk2 tleap tr sort uniq head tail wc realpath; do
+for cmd in awk grep sed gmx obabel antechamber parmchk2 tleap tr sort uniq head tail wc realpath; do
     require_cmd "$cmd"
 done
+[[ "$INPUT_MODE" == "rcsb" ]] && require_cmd wget
 require_cmd amb2gro_top_gro.py
 
 if [[ "$CHARGE_METHOD" == "resp" ]]; then
@@ -235,7 +246,13 @@ cd "$OUTDIR"
 LOGFILE="prepare_${PROID}_${LIGID}_${CHARGE_METHOD}.log"
 exec > >(tee -a "$LOGFILE") 2>&1
 
-log "Input mode:              $INPUT_MODE"
+if [[ "$INPUT_MODE" == "local" ]] && (( LOCAL_LIGAND_GIVEN )); then
+    log "Input mode:              local protein + local ligand"
+elif [[ "$INPUT_MODE" == "rcsb" ]] && (( LOCAL_LIGAND_GIVEN )); then
+    log "Input mode:              RCSB protein + local ligand"
+else
+    log "Input mode:              RCSB protein + RCSB ligand"
+fi
 log "Protein/PDB ID:          $PROID"
 log "Ligand name:             $LIGID"
 log "Ligand charge method:    $CHARGE_METHOD"
@@ -311,19 +328,39 @@ check_charge_sum_mol2() {
     ' "$mol2"
 }
 
+copy_local_ligand() {
+    # Copy local ligand to LIGAND_PDB, converting to PDB format via obabel if needed.
+    local src="$LOCAL_LIGAND_PDB"
+    local ext="${src##*.}"; ext="${ext,,}"
+    if [[ "$ext" == "pdb" ]]; then
+        cp "$src" "$LIGAND_PDB"
+    else
+        log "Local ligand is ${ext} format; converting to PDB via obabel"
+        obabel "$src" -O "$LIGAND_PDB" 2>/dev/null \
+            || die "obabel failed to convert local ligand (${ext}) to PDB"
+        [[ -s "$LIGAND_PDB" ]] || die "obabel produced empty PDB from local ligand"
+    fi
+    log "Local ligand copied to ${LIGAND_PDB}"
+}
+
 download_pdb() {
+    # Protein source
     if [[ "$INPUT_MODE" == "local" ]]; then
-        log "Using local protein and ligand PDB files"
+        log "Using local protein: ${LOCAL_PROTEIN_PDB}"
         cp "$LOCAL_PROTEIN_PDB" "$PROTEIN_PDB"
-        cp "$LOCAL_LIGAND_PDB" "$LIGAND_PDB"
-        cat "$PROTEIN_PDB" "$LIGAND_PDB" > "$COMPLEX_PDB"
-        cp "$PROTEIN_PDB" "$WORK_PDB"
+        cp "$LOCAL_PROTEIN_PDB" "$WORK_PDB"
     else
         log "Downloading ${PROID} from RCSB"
         wget -O "$RAW_PDB" "https://files.rcsb.org/download/${PROID}.pdb"
         [[ -s "$RAW_PDB" ]] || die "Downloaded PDB is empty"
         cp "$RAW_PDB" "$WORK_PDB"
     fi
+
+    # Ligand source (independent of protein source)
+    if (( LOCAL_LIGAND_GIVEN )); then
+        copy_local_ligand
+    fi
+    # RCSB ligand is extracted later in extract_coordinates after pdbfixer runs
 }
 
 maybe_run_pdbfixer() {
@@ -331,8 +368,9 @@ maybe_run_pdbfixer() {
     log "PDBFixer requested"
 
     if optional_cmd pdbfixer; then
-        log "Running pdbfixer CLI"
-        pdbfixer "$WORK_PDB" --output="$WORK_PDB.fixed" --add-atoms=heavy --keep-heterogens=all
+        log "Running pdbfixer CLI (pH=${PH})"
+        pdbfixer "$WORK_PDB" --output="$WORK_PDB.fixed" \
+            --add-atoms=heavy --keep-heterogens=all --ph="$PH"
         [[ -s "$WORK_PDB.fixed" ]] || die "pdbfixer CLI did not produce output"
         mv "$WORK_PDB.fixed" "$WORK_PDB"
         return 0
@@ -369,8 +407,8 @@ PY
 }
 
 detect_ligand_sites() {
-    if [[ "$INPUT_MODE" == "local" ]]; then
-        log "Local mode: ligand selection by chain/residue is skipped"
+    if (( LOCAL_LIGAND_GIVEN )); then
+        log "Local ligand provided: skipping RCSB site detection"
         SEL_CHAIN=""
         SEL_RESI=""
         return 0
@@ -411,35 +449,42 @@ detect_ligand_sites() {
 }
 
 extract_coordinates() {
+    # ── Protein ───────────────────────────────────────────────────────────────
     if [[ "$INPUT_MODE" == "local" ]]; then
-        log "Local mode: using provided protein and ligand files directly"
-        [[ -s "$PROTEIN_PDB" ]] || die "Local protein file copy failed"
-        [[ -s "$LIGAND_PDB"  ]] || die "Local ligand file copy failed"
-        cat "$PROTEIN_PDB" "$LIGAND_PDB" > "$COMPLEX_PDB"
-        return 0
+        if (( USE_PDBFIXER )); then
+            log "Propagating pdbfixer output to protein.pdb"
+            cp "$WORK_PDB" "$PROTEIN_PDB"
+        fi
+        [[ -s "$PROTEIN_PDB" ]] || die "protein.pdb missing after local copy"
+    else
+        log "Extracting protein ATOM records from ${WORK_PDB}"
+        grep '^ATOM  ' "$WORK_PDB" > "$PROTEIN_PDB"
+        [[ -s "$PROTEIN_PDB" ]] || die "protein.pdb is empty after extraction"
     fi
 
-    log "Extracting protein ATOM records"
-    grep '^ATOM  ' "$WORK_PDB" > "$PROTEIN_PDB"
-    [[ -s "$PROTEIN_PDB" ]] || die "protein.pdb is empty"
-
-    log "Extracting selected ligand"
-    awk -v lig="$LIGID" -v schain="$SEL_CHAIN" -v sresi="$SEL_RESI" '
-        /^HETATM/ {
-            resn  = substr($0,18,3)
-            alt   = substr($0,17,1)
-            chain = substr($0,22,1)
-            resi  = substr($0,23,4)
-            gsub(/ /,"",resn)
-            gsub(/ /,"",alt)
-            gsub(/ /,"",chain)
-            gsub(/ /,"",resi)
-            if (resn == lig && chain == schain && resi == sresi && (alt == "" || alt == "A")) print
-        }
-    ' "$WORK_PDB" > "$LIGAND_PDB"
-    [[ -s "$LIGAND_PDB" ]] || die "Ligand extraction failed"
+    # ── Ligand ────────────────────────────────────────────────────────────────
+    if ! (( LOCAL_LIGAND_GIVEN )); then
+        log "Extracting selected ligand (${LIGID}) from ${WORK_PDB}"
+        awk -v lig="$LIGID" -v schain="$SEL_CHAIN" -v sresi="$SEL_RESI" '
+            /^HETATM/ {
+                resn  = substr($0,18,3)
+                alt   = substr($0,17,1)
+                chain = substr($0,22,1)
+                resi  = substr($0,23,4)
+                gsub(/ /,"",resn)
+                gsub(/ /,"",alt)
+                gsub(/ /,"",chain)
+                gsub(/ /,"",resi)
+                if (resn == lig && chain == schain && resi == sresi && (alt == "" || alt == "A")) print
+            }
+        ' "$WORK_PDB" > "$LIGAND_PDB"
+        [[ -s "$LIGAND_PDB" ]] || die "Ligand extraction failed"
+    else
+        [[ -s "$LIGAND_PDB" ]] || die "Local ligand file missing: ${LIGAND_PDB}"
+    fi
 
     cat "$PROTEIN_PDB" "$LIGAND_PDB" > "$COMPLEX_PDB"
+    [[ -s "$COMPLEX_PDB" ]] || die "complex.pdb is empty"
 }
 
 prepare_protein() {
@@ -449,8 +494,9 @@ prepare_protein() {
     [[ -s "$PROTEIN_GRO" ]] || die "Protein gro not created"
 
     log "Extracting protein include block"
-    sed -n '/moleculetype/,/endif/{/endif/!p;/endif/p;}' "$PROTEIN_TOP" > "$PROTEIN_ITP"
+    sed -n '/^\[ *moleculetype/,/^\[ *system/{/^\[ *system/b;p;}' "$PROTEIN_TOP" > "$PROTEIN_ITP"
     [[ -s "$PROTEIN_ITP" ]] || die "Protein include file not created"
+    grep -q '^\[ *moleculetype' "$PROTEIN_ITP" || die "Protein ITP extraction failed: missing [ moleculetype ]"
 
     log "Detecting protein molecule names from [ molecules ] in ${PROTEIN_TOP}"
     mapfile -t PROTEIN_MOLNAMES < <(
@@ -468,25 +514,86 @@ prepare_protein() {
     log "Protein molecule names detected: ${PROTEIN_MOLNAMES[*]}"
 }
 
-prepare_ligand_bcc() {
-    log "Ligand charge route: AM1-BCC"
+prepare_ligand_antechamber() {
+    log "Ligand charge route: antechamber (method=${CHARGE_METHOD})"
     log "Generating ligand mol2 with hydrogens"
     obabel "$LIGAND_PDB" -O "$LIG_H_MOL2" -h
     [[ -s "$LIG_H_MOL2" ]] || die "Open Babel failed to create $LIG_H_MOL2"
 
-    log "Running antechamber AM1-BCC"
+    log "Running antechamber (charge method: ${CHARGE_METHOD})"
     antechamber \
         -i "$LIG_H_MOL2" -fi mol2 \
         -o "$AC_MOL2" -fo mol2 \
-        -c bcc -s 2 \
+        -c "$CHARGE_METHOD" -s 2 \
         -rn "$LIGID" -at gaff2 \
         -nc "$LIG_CHARGE" -pf yes
     [[ -s "$AC_MOL2" ]] || die "Antechamber did not create $AC_MOL2"
     check_charge_sum_mol2 "$AC_MOL2"
 }
 
+graft_coords_to_mol2() {
+    # Replace coordinates in target mol2 with those from ref mol2, atom-for-atom.
+    # Used to restore original ligand geometry after G16 reorientation.
+    local ref_mol2="$1"
+    local target_mol2="$2"
+    log "Grafting original coordinates from ${ref_mol2} into ${target_mol2}"
+    python3 - "$ref_mol2" "$target_mol2" <<'PYEOF'
+import sys
+
+ref_path, tgt_path = sys.argv[1], sys.argv[2]
+
+def mol2_atom_coords(path):
+    coords = []
+    in_atom = False
+    with open(path) as f:
+        for line in f:
+            if line.startswith('@<TRIPOS>ATOM'):
+                in_atom = True; continue
+            if line.startswith('@<TRIPOS>') and in_atom:
+                break
+            if in_atom and line.strip():
+                p = line.split()
+                coords.append((float(p[2]), float(p[3]), float(p[4])))
+    return coords
+
+orig = mol2_atom_coords(ref_path)
+
+lines = open(tgt_path).readlines()
+out = []
+in_atom = False
+idx = 0
+for line in lines:
+    if line.startswith('@<TRIPOS>ATOM'):
+        in_atom = True; out.append(line); continue
+    if line.startswith('@<TRIPOS>') and in_atom:
+        in_atom = False
+    if in_atom and line.strip():
+        p = line.split()
+        if idx < len(orig):
+            p[2], p[3], p[4] = f'{orig[idx][0]:.4f}', f'{orig[idx][1]:.4f}', f'{orig[idx][2]:.4f}'
+        idx += 1
+        # Rebuild line; mol2 ATOM has 9 fields
+        out.append('{:>7s} {:<8s} {:>10.4f} {:>10.4f} {:>10.4f} {:<9s} {:>4s} {:<8s} {:>10.6f}\n'.format(
+            p[0], p[1], float(p[2]), float(p[3]), float(p[4]),
+            p[5], p[6], p[7], float(p[8])))
+        continue
+    out.append(line)
+if idx != len(orig):
+    print(f'ERROR: atom count mismatch: ref={len(orig)}, target={idx}', file=sys.stderr)
+    sys.exit(1)
+with open(tgt_path, 'w') as f:
+    f.writelines(out)
+print(f'  Coordinate graft complete: {idx} atoms restored from {ref_path}')
+PYEOF
+    [[ $? -eq 0 ]] || die "Coordinate grafting failed (atom count mismatch between ${1} and ${2})"
+}
+
 prepare_ligand_resp() {
     log "Ligand charge route: RESP through Gaussian16 + antechamber"
+
+    log "Saving original ligand geometry as mol2 (coordinate reference)"
+    obabel "$LIGAND_PDB" -O "$LIG_H_MOL2" -h
+    [[ -s "$LIG_H_MOL2" ]] || die "Open Babel failed to create $LIG_H_MOL2"
 
     log "Generating ligand XYZ with hydrogens for Gaussian"
     obabel "$LIGAND_PDB" -O "$LIG_XYZ" -h
@@ -501,7 +608,7 @@ prepare_ligand_resp() {
 %nprocshared=${NPROC}
 %nosave
 %chk=${LIGID}_opt.chk
-#p opt ${BASIS_OPT}
+#p opt nosymm ${BASIS_OPT}
 
 ${LIGID} optimization
 
@@ -517,7 +624,7 @@ EOF_OPT
 %nprocshared=${NPROC}
 %nosave
 %chk=${LIGID}_ESP.chk
-#p ${BASIS_ESP} guess=read geom=check Pop=(MK) IOp(6/50=1)
+#p nosymm ${BASIS_ESP} guess=read geom=check Pop=(MK) IOp(6/50=1)
 
 ${LIGID} ESP from optimized geometry
 
@@ -543,7 +650,7 @@ EOF_ESP
 %nprocshared=${NPROC}
 %nosave
 %chk=${LIGID}_ESP_noopt.chk
-#p ${BASIS_ESP} Pop=(MK) IOp(6/50=1)
+#p nosymm ${BASIS_ESP} Pop=(MK) IOp(6/50=1)
 
 ${LIGID} ESP no optimization
 
@@ -569,14 +676,15 @@ EOF_NOOPT
         -rn "$LIGID" -at gaff2 \
         -nc "$LIG_CHARGE" -pf yes
     [[ -s "$AC_MOL2" ]] || die "Antechamber RESP did not create $AC_MOL2"
+
+    graft_coords_to_mol2 "$LIG_H_MOL2" "$AC_MOL2"
     check_charge_sum_mol2 "$AC_MOL2"
 }
 
 prepare_ligand() {
     case "$CHARGE_METHOD" in
-        bcc)  prepare_ligand_bcc ;;
         resp) prepare_ligand_resp ;;
-        *) die "Unsupported charge method: $CHARGE_METHOD" ;;
+        *)    prepare_ligand_antechamber ;;
     esac
 
     log "Running parmchk2"
@@ -602,8 +710,8 @@ EOF_TLEAP
     [[ -s "$LIG_GMX_GRO" ]] || die "Ligand GROMACS gro missing"
 
     log "Splitting ligand topology"
-    sed -n '/atomtypes/,/moleculetype/{/moleculetype/b;p}' "$LIG_GMX_TOP" > "$LIG_ATOMTYPES_ITP"
-    sed -n '/moleculetype/,/system/{/system/b;p}' "$LIG_GMX_TOP" > "$LIG_MOL_ITP"
+    sed -n '/^\[ *atomtypes/,/^\[ *moleculetype/{/^\[ *moleculetype/b;p;}' "$LIG_GMX_TOP" > "$LIG_ATOMTYPES_ITP"
+    sed -n '/^\[ *moleculetype/,/^\[ *system/{/^\[ *system/b;p;}' "$LIG_GMX_TOP" > "$LIG_MOL_ITP"
     [[ -s "$LIG_ATOMTYPES_ITP" ]] || die "Ligand atomtypes include is empty"
     [[ -s "$LIG_MOL_ITP" ]] || die "Ligand molecule include is empty"
 
@@ -611,7 +719,7 @@ EOF_TLEAP
 
 ; Include Position restraint file
 #ifdef POSRES
-#include "posre_${LIGID}.itp"
+#include "./${LIG_POSRE_ITP}"
 #endif
 EOF_POSRE
 
@@ -645,6 +753,9 @@ validate_topology_names() {
     grep -q '^\[ *moleculetype *\]' "$PROTEIN_ITP" || die "Protein include file lacks [ moleculetype ]"
     grep -q '^\[ *moleculetype *\]' "$LIG_MOL_ITP" || die "Ligand include file lacks [ moleculetype ]"
     [[ -s "$LIG_ATOMTYPES_ITP" ]] || die "Ligand atomtypes include is empty"
+    [[ -s "$LIG_POSRE_ITP" ]]     || die "Ligand position restraint file missing: ${LIG_POSRE_ITP}"
+    [[ -f "posre_protein.itp" ]]  || die "Protein position restraint file missing: posre_protein.itp"
+    grep -q '#ifdef POSRES' "$LIG_MOL_ITP" || die "Ligand mol ITP missing #ifdef POSRES block"
 }
 
 build_final_topology() {
@@ -877,7 +988,7 @@ write_summary() {
     cat > preparation_summary.txt <<EOF_SUMMARY
 Protein/PDB ID:        ${PROID}
 Ligand name:           ${LIGID}
-Input mode:            ${INPUT_MODE}
+Input mode:            $( [[ "$INPUT_MODE" == "local" ]] && echo "local protein" || echo "RCSB protein" ) + $( (( LOCAL_LIGAND_GIVEN )) && echo "local ligand" || echo "RCSB ligand" )
 Force field:           ${FF}
 Water model:           ${WATER}
 Charge method:         ${CHARGE_METHOD}
