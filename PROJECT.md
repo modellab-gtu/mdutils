@@ -29,13 +29,21 @@ Full pipeline for preparing a solvated protein–ligand complex and running clas
 
 **Directory:** `automd/ligprep/`
 
-**Status:** In progress.
+**Script:** `automd/ligprep/prepare_lig_md.sh`
+
+**Status:** Complete.
 
 Pipeline for preparing a solvated ligand-only system and running classical MD — used for computing ligand properties in solution (e.g. hydration free energy reference leg, conformational sampling).
 
-- Ligand parameterisation with GAFF2
-- Solvation in explicit water box
-- GROMACS and/or AMBER output
+- Local ligand file or RCSB extraction input
+- Ligand parameterisation with GAFF2 (antechamber/parmchk2)
+- Charge methods: AM1-BCC, RESP (Gaussian16), abcg2, mul, cm2
+- Two topology pathways selectable via `--ff`:
+  - **tleap + amb2gro** — GROMACS force fields (for water/ion topology)
+  - **tleap + parmed** — AMBER-native; auto-selected when FF has no GROMACS equivalent
+- Solvation, ionisation, energy minimisation
+- GROMACS output: topology, coordinates, index, MDP templates (NVT/NPT/MD)
+- AMBER output (parmed route): prmtop, inpcrd, input file templates (min/nvt/npt/md)
 
 ---
 

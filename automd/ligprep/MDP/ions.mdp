@@ -1,0 +1,11 @@
+; ions.mdp - minimal run input for gmx grompp before genion
+; No actual simulation is performed; this just generates the tpr.
+integrator               = steep
+nsteps                   = 0
+pbc                      = xyz
+cutoff-scheme            = verlet
+nstlist                  = 1
+rlist                    = 1.0
+coulombtype              = PME
+rcoulomb                 = 1.0
+rvdw                     = 1.0

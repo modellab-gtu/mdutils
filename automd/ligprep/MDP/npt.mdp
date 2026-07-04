@@ -1,0 +1,52 @@
+; NPT equilibration - Langevin dynamics + C-rescale barostat (GROMACS >= 2021)
+define                   = -DPOSRES_LIG
+; Run control
+integrator               = sd
+tinit                    = 0
+dt                       = 0.002
+nsteps                   = 500000              ; 1 ns
+nstcomm                  = 100
+; Output control
+nstxout                  = 1000
+nstvout                  = 1000
+nstlog                   = 1000
+nstenergy                = 1000
+nstxout-compressed       = 1000
+; Neighborsearching and nonbonded interactions
+cutoff-scheme            = verlet
+nstlist                  = 20
+pbc                      = xyz
+; Electrostatics
+coulombtype              = PME
+rcoulomb                 = 1.2
+; van der Waals
+vdwtype                  = cutoff
+vdw-modifier             = Force-switch
+rvdw-switch              = 1.0
+rvdw                     = 1.2
+; Dispersion correction
+DispCorr                 = EnerPres
+; PME parameters
+fourierspacing           = 0.16
+pme_order                = 4
+ewald_rtol               = 1e-05
+epsilon_surface          = 0
+; Temperature coupling - handled by sd integrator (Langevin)
+; Replace "LIG" with your actual ligand residue name — see prep script output
+tc-grps                  = LIG Water_and_ions
+tau_t                    = 1.0   1.0
+ref_t                    = 310   310
+; Pressure coupling - C-rescale (stochastic cell rescaling)
+Pcoupl                   = C-rescale
+tau_p                    = 0.5
+pcoupltype               = isotropic
+compressibility          = 4.5e-05
+ref_p                    = 1.0
+refcoord-scaling         = com
+gen_vel                  = no
+; Constraints
+constraints              = h-bonds
+constraint-algorithm     = lincs
+continuation             = yes
+lincs-order              = 4
+lincs-iter               = 1

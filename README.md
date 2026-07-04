@@ -62,7 +62,7 @@ prepare_prolig_md.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0 \
 
 ### MDP templates
 
-Ready-to-use MDP files are in `automd/proprep/MDP/`:
+Ready-to-use MDP files are in `automd/prolig_normalMD/MDP/`:
 
 | File | Stage | Notes |
 |------|-------|-------|
@@ -75,6 +75,56 @@ Ready-to-use MDP files are in `automd/proprep/MDP/`:
 > **Note:** Before running NVT/NPT/MD, replace `Protein_` in `tc-grps` with your
 > actual ligand name (e.g. `Protein_JZ4`). The prep script prints the exact line
 > at the end of its run.
+
+---
+
+## automd/ligprep — Ligand + Solvent Classical MD Preparation
+
+Pipeline for preparing a solvated ligand-only system for classical MD.
+
+**Script:** `automd/ligprep/prepare_lig_md.sh`
+
+### Features
+
+- Local ligand file or RCSB PDB extraction
+- Ligand parameterisation with GAFF2 (AmberTools antechamber/parmchk2)
+- Same charge methods as prolig\_normalMD: `bcc`, `resp`, `abcg2`, …
+- Two topology pathways via `--ff` (same logic as prolig\_normalMD):
+  - **tleap + amb2gro** (default): GROMACS force fields for water/ion topology
+  - **tleap + parmed** (`--use-parmed`): AMBER-native; auto-selected when `--ff` has no GROMACS equivalent
+
+### Input modes
+
+```bash
+# 1. Local ligand file (SDF, MOL2, PDB, …)
+prepare_lig_md.sh --local-ligand lig.sdf --ligand LIG --charge-method bcc --charge 0
+
+# 2. Extract ligand from RCSB PDB
+prepare_lig_md.sh --pdb 3HTB --ligand JZ4 --charge-method bcc --charge 0
+
+# 3. RESP charges from local file
+prepare_lig_md.sh --local-ligand lig.mol2 --ligand LIG \
+    --charge-method resp --charge 0 --resp-opt yes
+
+# 4. parmed pathway (AMBER ff14SB water model via tleap)
+prepare_lig_md.sh --local-ligand lig.sdf --ligand LIG \
+    --charge-method bcc --charge 0 --ff ff14SB
+```
+
+### MDP templates
+
+Ready-to-use MDP files are in `automd/ligprep/MDP/`:
+
+| File | Stage | Notes |
+|------|-------|-------|
+| `ions.mdp` | Ion placement | minimal grompp input |
+| `em.mdp` | Energy minimisation | steep descent, POSRES\_LIG + FLEXIBLE |
+| `nvt.mdp` | NVT equilibration | sd integrator, 1 ns |
+| `npt.mdp` | NPT equilibration | sd + C-rescale barostat, 1 ns |
+| `md.mdp` | Production MD | sd + C-rescale, 100 ns, no restraints |
+
+> **Note:** Before running NVT/NPT/MD, replace `LIG` in `tc-grps` with your
+> actual ligand residue name. The prep script prints the exact name at the end.
 
 ---
 
