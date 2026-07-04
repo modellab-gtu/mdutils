@@ -1,10 +1,12 @@
-; NPT equilibration (phase 1) - Berendsen barostat, position restraints on
+; NPT equilibration - C-rescale barostat (GROMACS >= 2021)
+; C-rescale gives correct NPT ensemble while remaining stable during equilibration,
+; replacing the old Berendsen -> Parrinello-Rahman two-step workflow.
 define                   = -DPOSRES -DPOSRES_LIG
 ; Run control
 integrator               = md
 tinit                    = 0
 dt                       = 0.002
-nsteps                   = 100000              ; 200 ps
+nsteps                   = 500000              ; 1 ns
 nstcomm                  = 100
 ; Output control
 nstxout                  = 1000
@@ -37,9 +39,9 @@ tcoupl                   = V-rescale
 tc-grps                  = Protein_ Water_and_ions
 tau_t                    = 1.0   1.0
 ref_t                    = 310   310
-; Pressure coupling - Berendsen for initial equilibration
-Pcoupl                   = Berendsen
-tau_p                    = 2.0
+; Pressure coupling - C-rescale (stochastic cell rescaling)
+Pcoupl                   = C-rescale
+tau_p                    = 0.5
 pcoupltype               = isotropic
 compressibility          = 4.5e-05
 ref_p                    = 1.0
