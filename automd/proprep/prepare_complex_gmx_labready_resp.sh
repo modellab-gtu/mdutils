@@ -56,7 +56,7 @@ BASIS_ESP="HF/6-31G*"
 SCRIPT_START_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MDPDIR="${SCRIPT_START_DIR}/MDP"
-MDPDIR_BUNDLED="${SCRIPT_DIR}/template/MDP"
+MDPDIR_BUNDLED="${SCRIPT_DIR}/MDP"
 
 usage() {
 cat <<EOF_USAGE
