@@ -36,8 +36,9 @@ info "Step 4: installing GROMACS"
 
 # ── 5. AmberTools ─────────────────────────────────────────────────────────────
 info "Step 5: installing AmberTools 25 (dacase channel)"
-"$CONDA_CMD" install -y -n "$ENV_NAME" ambertools-dac=25 \
-    --channel dacase --channel conda-forge
+"$CONDA_CMD" config --add channels conda-forge
+"$CONDA_CMD" config --set channel_priority strict
+"$CONDA_CMD" install -y -n "$ENV_NAME" dacase::ambertools-dac=25
 
 # ── Verify ────────────────────────────────────────────────────────────────────
 info "Verifying installation"
