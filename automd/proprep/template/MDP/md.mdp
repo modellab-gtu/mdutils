@@ -32,7 +32,7 @@ pme_order                = 4
 ewald_rtol               = 1e-05
 epsilon_surface          = 0
 ; Temperature coupling - handled by sd integrator (Langevin)
-tcoupl                   = no
+; tcoupl                 = no  ; sd integrator handles thermostatting
 ; Replace "Protein_" with your actual ligand name, e.g. "Protein_LIG"
 ; The prep script logs the exact group name: tc-grps = Protein_<LIGID> Water_and_ions
 tc-grps                  = Protein_ Water_and_ions

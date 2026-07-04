@@ -32,7 +32,7 @@ pme_order                = 4
 ewald_rtol               = 1e-05
 epsilon_surface          = 0
 ; Temperature coupling - handled by sd integrator (Langevin)
-tcoupl                   = no
+; tcoupl                 = no  ; sd integrator handles thermostatting
 ; Replace "Protein_" with your actual ligand name (e.g. Protein_LIG) — see prep script output
 tc-grps                  = Protein_ Water_and_ions
 tau_t                    = 1.0   1.0
