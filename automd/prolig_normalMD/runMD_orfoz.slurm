@@ -19,7 +19,9 @@ echo "number of CPUs=  $SLURM_NPROCS"
 export GMX_MAXBACKUP=-1
 
 workdir=$(pwd)
-MDPDIR="$workdir"/MDP
+# MDP files: by default ./MDP in the submit directory (copy mdutils/automd/prolig_normalMD/MDP there),
+# or point MDPDIR at that folder: sbatch --export=ALL,MDPDIR=/path/to/mdutils/automd/prolig_normalMD/MDP ...
+MDPDIR="${MDPDIR:-$workdir/MDP}"
 LIGAND=$1
 #for lig in comp_3a_26_docked_prep  comp_3b_30_docked_prep  comp_3c_30_docked_prep  comp_3d_30_docked_prep  comp_3e_30_docked_prep
 #do
@@ -30,10 +32,10 @@ do
     gmx grompp -f "$MDPDIR"/nvt.mdp -c em.gro -r em.gro -p topol.top -o nvt_"$i".tpr -n index.ndx -maxwarn 1
     mpirun -np 112 gmx_mpi mdrun -v -deffnm nvt_"$i"
 
-    gmx grompp -f "$MDPDIR"/NPT/npt.mdp -c nvt_"$i".gro -r nvt_"$i".gro -p topol.top -o npt_"$i".tpr -n index.ndx
+    gmx grompp -f "$MDPDIR"/npt.mdp -c nvt_"$i".gro -r nvt_"$i".gro -p topol.top -o npt_"$i".tpr -n index.ndx
     mpirun -np 112 gmx_mpi mdrun -v -deffnm npt_"$i"
 
-    gmx grompp -f "$MDPDIR"/Production_MD/md.mdp -c npt_"$i".gro -r npt_"$i".gro -p topol.top -o md_"$i".tpr -n index.ndx
+    gmx grompp -f "$MDPDIR"/md.mdp -c npt_"$i".gro -r npt_"$i".gro -p topol.top -o md_"$i".tpr -n index.ndx
     mpirun -np 112 gmx_mpi mdrun -v -deffnm md_"$i"
 done
 cd $workdir

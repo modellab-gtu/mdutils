@@ -35,6 +35,7 @@ FF="amber99sb-ildn"
 WATER="tip3p"
 BOXTYPE="dodecahedron"
 BOXDIST="1.0"
+SALT_CONC="0.15"           # NaCl concentration (mol/L) added on top of neutralising ions
 IONS_MDP=""
 EM_MDP=""
 OUTDIR=""
@@ -89,6 +90,7 @@ General options:
   -w, --water NAME             Water model, default: ${WATER}
   -b, --boxtype TYPE           Box type, default: ${BOXTYPE}
   -d, --distance NM            Solvent distance in nm, default: ${BOXDIST}
+  -s, --salt M                 NaCl concentration in mol/L on top of neutralising ions, default: ${SALT_CONC}
       --ions-mdp FILE          ions.mdp path (default: MDP/ions.mdp if present, else bundled template)
       --em-mdp FILE            em.mdp path  (default: MDP/em.mdp  if present, else bundled template)
       --outdir DIR             Output directory, default: prep_<PDB>_<LIG>
@@ -171,6 +173,7 @@ while [[ $# -gt 0 ]]; do
         -w|--water) WATER="$2"; shift 2 ;;
         -b|--boxtype) BOXTYPE="$2"; shift 2 ;;
         -d|--distance) BOXDIST="$2"; shift 2 ;;
+        -s|--salt) SALT_CONC="$2"; shift 2 ;;
         --ions-mdp) IONS_MDP="$2"; shift 2 ;;
         --em-mdp) EM_MDP="$2"; shift 2 ;;
         --outdir) OUTDIR="$2"; shift 2 ;;
@@ -222,6 +225,7 @@ case "$RESP_OPT" in
 esac
 
 [[ "$LIG_CHARGE" =~ ^-?[0-9]+$ ]] || die "--charge must be an integer, got: $LIG_CHARGE"
+[[ "$SALT_CONC" =~ ^[0-9]*\.?[0-9]+$ ]] || die "--salt must be a non-negative number (mol/L), got: $SALT_CONC"
 [[ "$LIG_MULT" =~ ^[0-9]+$ ]] || die "--mult must be a positive integer, got: $LIG_MULT"
 [[ "$NPROC" =~ ^[0-9]+$ ]] || die "--nproc must be a positive integer, got: $NPROC"
 
@@ -344,21 +348,36 @@ check_g16_normal() {
 }
 
 check_charge_sum_mol2() {
+    # Report the mol2 charge sum and remove the small residual left by charge rounding
+    # (e.g. +1.003 for a +1 ligand), spread evenly over all atoms so the sum equals --charge exactly.
+    # A residual >= 0.02 e means a wrong --charge/protonation and is fatal.
     local mol2="$1"
     [[ -s "$mol2" ]] || die "Charge-check mol2 missing: $mol2"
-    awk '
-        /^@<TRIPOS>ATOM/ {in_atom=1; next}
-        /^@<TRIPOS>/ && in_atom {in_atom=0}
-        in_atom && NF >= 9 {s += $9; n++}
-        END {
-            if (n == 0) {
-                printf "  Charge check: no MOL2 atoms parsed\n"
-                exit 0
-            }
-            printf "  MOL2 atom count = %d\n", n
-            printf "  Sum charge     = %.6f\n", s
-        }
-    ' "$mol2"
+    python3 - "$mol2" "$LIG_CHARGE" <<'EOF_QFIX' || die "Charge sum of ${mol2} does not match --charge ${LIG_CHARGE}"
+import sys
+path, target = sys.argv[1], float(sys.argv[2])
+lines = open(path).read().split("\n")
+start = lines.index("@<TRIPOS>ATOM") + 1
+end = next(i for i in range(start, len(lines)) if lines[i].startswith("@<TRIPOS>"))
+atoms = [i for i in range(start, end) if len(lines[i].split()) >= 9]
+q = [float(lines[i].split()[8]) for i in atoms]
+s = sum(q)
+print("  MOL2 atom count = %d" % len(q))
+print("  Sum charge     = %.6f" % s)
+delta = target - s
+if abs(delta) >= 0.02:
+    print("  ERROR: sum differs from --charge %+d by %.4f" % (target, -delta), file=sys.stderr)
+    sys.exit(1)
+if abs(delta) > 5e-7:
+    q = [round(x + delta / len(q), 6) for x in q]
+    q[-1] = round(q[-1] + (target - sum(q)), 6)
+    for i, x in zip(atoms, q):
+        p = lines[i].split()
+        p[8] = "%.6f" % x
+        lines[i] = "%7s %-8s %10s %10s %10s %-6s %4s %-8s %10s" % tuple(p[:9]) + ("" if len(p) == 9 else " " + " ".join(p[9:]))
+    open(path, "w").write("\n".join(lines))
+    print("  Residual %.6f spread over %d atoms -> sum = %.6f" % (delta, len(q), sum(q)))
+EOF_QFIX
 }
 
 copy_local_ligand() {
@@ -372,6 +391,13 @@ copy_local_ligand() {
         obabel "$src" -O "$LIGAND_PDB" 2>/dev/null \
             || die "obabel failed to convert local ligand (${ext}) to PDB"
         [[ -s "$LIGAND_PDB" ]] || die "obabel produced empty PDB from local ligand"
+        # Net charge from the formal charges obabel writes in PDB columns 79-80 must match --charge
+        local fc
+        fc=$(awk '/^(ATOM|HETATM)/{c=substr($0,79,2); gsub(/ /,"",c); if(c!=""){s=substr(c,length(c),1); v=substr(c,1,length(c)-1); if(v=="")v=1; q+=(s=="-"?-v:v)}}END{print q+0}' "$LIGAND_PDB")
+        if [[ "$fc" != "$LIG_CHARGE" ]]; then
+            die "Formal charges in ${src##*/} sum to ${fc}, but --charge is ${LIG_CHARGE}. Fix the protonation or --charge."
+        fi
+        log "Ligand net formal charge from ${ext} file: ${fc} (matches --charge)"
     fi
     log "Local ligand copied to ${LIGAND_PDB}"
 }
@@ -998,6 +1024,21 @@ EOF_NDX_TC
     log "Use in MDP: tc-grps = ${tc_group} Water_and_ions"
 }
 
+salt_pairs_for() {
+    # Echo the number of Na+/Cl- pairs for SALT_CONC (mol/L), using N = c * N_wat / 55.5
+    # with the water count from a solvation-only tleap pass. $1 = tleap build text, $2 = unit name.
+    awk -v c="$SALT_CONC" 'BEGIN{exit !(c>0)}' || { echo 0; return 0; }
+    tleap -f - > tleap_saltcount.log 2>&1 <<EOF_SALT
+$1
+savepdb $2 tleap_saltcount.pdb
+quit
+EOF_SALT
+    [[ -s tleap_saltcount.pdb ]] || die "tleap water-count pass failed (see tleap_saltcount.log)"
+    local nwat; nwat=$(awk '$1~/^(ATOM|HETATM)$/ && $3=="O" && $4=="WAT"' tleap_saltcount.pdb | wc -l)
+    rm -f tleap_saltcount.pdb
+    python3 -c "print(int(round(${SALT_CONC} * ${nwat} / 55.5)))"
+}
+
 prepare_system_parmed() {
     local amber_ff_leaprc box_cmd box_dist_a
     local complex_prmtop="complex_solv.prmtop"
@@ -1030,17 +1071,23 @@ prepare_system_parmed() {
     box_dist_a=$(python3 -c "print(${BOXDIST} * 10)")
 
     log "Building full system with tleap (${FF} → ${amber_ff_leaprc} + GAFF2 + TIP3P)"
-    tleap -f - <<EOF_TLEAP
-source ${amber_ff_leaprc}
+    local tleap_build npairs salt_cmd=""
+    tleap_build="source ${amber_ff_leaprc}
 source leaprc.gaff2
 source leaprc.water.tip3p
 loadamberparams ${AC_FRCMOD}
 LIG = loadMol2 ${AC_MOL2}
 PROT = loadpdb protein.pdb
 SYSTEM = combine {PROT LIG}
-${box_cmd} SYSTEM TIP3PBOX ${box_dist_a}
+${box_cmd} SYSTEM TIP3PBOX ${box_dist_a}"
+    npairs=$(salt_pairs_for "$tleap_build" SYSTEM)
+    log "Salt: ${SALT_CONC} M NaCl -> ${npairs} Na+/Cl- pairs (plus neutralising ions)"
+    if (( npairs > 0 )); then salt_cmd="addIonsRand SYSTEM Na+ ${npairs} Cl- ${npairs}"; fi
+    tleap -f - <<EOF_TLEAP
+${tleap_build}
 addions SYSTEM Na+ 0
 addions SYSTEM Cl- 0
+${salt_cmd}
 saveamberparm SYSTEM ${complex_prmtop} ${complex_inpcrd}
 quit
 EOF_TLEAP
@@ -1062,6 +1109,18 @@ for res in amber.residues:
     elif rn in ('Cl-', 'CL-', 'Cl'):
         res.name = 'CL'
 
+# ff19SB has residue-specific CMAPs on the same atom types; ParmEd writes GROMACS cmaptypes keyed on
+# atom types and would merge them into one. Give each CMAP class its own copy of the central atom type.
+import copy as _copy
+_cls, _new = {}, {}
+for _c in amber.cmaps:
+    _k = _cls.setdefault(id(_c.type), len(_cls))
+    _a = _c.atom3
+    _key = (_a.atom_type.name, _k)
+    if _key not in _new:
+        _t = _copy.copy(_a.atom_type); _t.name = f"{_a.atom_type.name}{_k}"; _t._bond_type = _t.name
+        _new[_key] = _t
+    _a.atom_type = _new[_key]; _a.type = _new[_key].name
 amber.save('${parmed_top}', format='gromacs', overwrite=True)
 amber.save('${parmed_gro}', overwrite=True)
 print('parmed conversion complete')
@@ -1188,7 +1247,7 @@ solvate_and_minimize() {
         gmx grompp -f "$IONS_MDP" -c solv.gro -r solv.gro -p "$FINAL_TOP" -o ions.tpr -maxwarn 1
 
         log "Adding ions"
-        echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" -pname NA -nname CL -neutral
+        echo "SOL" | gmx genion -s ions.tpr -o solv_ions.gro -p "$FINAL_TOP" -pname NA -nname CL -neutral -conc "$SALT_CONC"
 
         generate_tc_index_after_ions "solv_ions.gro"
         em_coord="solv_ions.gro"
