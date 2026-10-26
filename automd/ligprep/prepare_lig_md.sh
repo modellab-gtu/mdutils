@@ -788,6 +788,18 @@ for res in amber.residues:
     elif rn in ('Cl-', 'CL-', 'Cl'):
         res.name = 'CL'
 
+# ff19SB has residue-specific CMAPs on the same atom types; ParmEd writes GROMACS cmaptypes keyed on
+# atom types and would merge them into one. Give each CMAP class its own copy of the central atom type.
+import copy as _copy
+_cls, _new = {}, {}
+for _c in amber.cmaps:
+    _k = _cls.setdefault(id(_c.type), len(_cls))
+    _a = _c.atom3
+    _key = (_a.atom_type.name, _k)
+    if _key not in _new:
+        _t = _copy.copy(_a.atom_type); _t.name = f"{_a.atom_type.name}{_k}"; _t._bond_type = _t.name
+        _new[_key] = _t
+    _a.atom_type = _new[_key]; _a.type = _new[_key].name
 amber.save('${parmed_top}', format='gromacs', overwrite=True)
 amber.save('${parmed_gro}', overwrite=True)
 print('parmed conversion complete')
