@@ -109,7 +109,8 @@ cd "$(dirname "$0")"
 if [[ -s em.gro ]]; then
     sbatch run_md.sbatch
 else
-    jid=$(sbatch --parsable run_em.sbatch) && sbatch --dependency=afterok:${jid} run_md.sbatch
+    # if EM fails, Slurm cancels the MD array instead of leaving it pending forever
+    jid=$(sbatch --parsable run_em.sbatch) && sbatch --dependency=afterok:${jid} --kill-on-invalid-dep=yes run_md.sbatch
 fi
 EOF
     chmod +x submit_md.sh
