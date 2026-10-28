@@ -26,6 +26,7 @@ write_run_files "JZ4 Water_and_ions" | tee out.log
 grep -q '^\[ Water_and_ions \]' index.ndx || { echo "FAIL: index.ndx lacks [ Water_and_ions ]"; exit 1; }
 grep -q 'Added index group \[ Water_and_ions \]' out.log || { echo "FAIL: no log line"; exit 1; }
 ! grep -q 'Warning: tc group' out.log || { echo "FAIL: warning emitted"; exit 1; }
+# -maxwarn 5: the unminimised solv_ions.gro and the fixture's MDP trigger grompp warnings unrelated to this test
 gmx grompp -f MDP/nvt.mdp -c solv_ions.gro -r solv_ions.gro -p topol.top -n index.ndx -o t.tpr -maxwarn 5 >grompp.log 2>&1 \
     || { tail -20 grompp.log; echo "FAIL: grompp"; exit 1; }
 echo "PASS"

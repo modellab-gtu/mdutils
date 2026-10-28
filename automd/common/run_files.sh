@@ -20,17 +20,18 @@ write_run_files() {
             grep -q "^\[ ${g} \]" index.ndx && continue
             if [[ "$g" == "$LIGID" ]]; then
                 local n; n=$(grep -c '^\[' index.ndx)
-                printf 'r %s\nname %s %s\nq\n' "$LIGID" "$n" "$LIGID" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
+                printf 'r %s\nname %s %s\nq\n' "$LIGID" "$n" "$LIGID" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1 || true   # the grep below decides success (callers run with set -e/pipefail)
                 grep -q "^\[ ${g} \]" index.ndx && log "Added index group [ ${g} ] (residue name ${LIGID})" && continue
             fi
             if [[ "$g" == "Water_and_ions" ]]; then
                 # a box without ions has no Water_and_ions group: build it from Water (or SOL) plus Ion if present
                 local w=Water n; n=$(grep -c '^\[' index.ndx)
                 grep -q '^\[ Water \]' index.ndx || w=SOL
+                # the Water | Ion branch is rarely reached: make_ndx creates Water_and_ions itself when ions exist
                 if grep -q '^\[ Ion \]' index.ndx; then
-                    printf '"%s" | "Ion"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
+                    printf '"%s" | "Ion"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1 || true   # the grep below decides success (callers run with set -e/pipefail)
                 else
-                    printf '"%s"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
+                    printf '"%s"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1 || true   # the grep below decides success (callers run with set -e/pipefail)
                 fi
                 grep -q "^\[ ${g} \]" index.ndx && log "Added index group [ ${g} ] (${w} group, no ions in the box)" && continue
             fi
