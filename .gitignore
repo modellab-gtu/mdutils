@@ -19,3 +19,5 @@ bin-release/
 
 # mdutils command wrappers
 !/bin/
+__pycache__/
+*.pyc
