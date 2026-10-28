@@ -1,6 +1,6 @@
 """abfe_analyze: free energies from the per-window GROMACS dhdl files of an abfe_setup folder.
 
-    abfe_analyze.sh ABFE_DIR [--equil-ns 0.5] [--temperature T] [--allow-missing]
+    abfe_analyze.sh ABFE_DIR [--equil-ns 0.5] [--allow-missing]
 
 Per leg and repeat (``<ABFE>/<leg>/rep<r>/lam_NN/prod.xvg``) it discards the first
 ``--equil-ns``, subsamples every window by its statistical inefficiency
@@ -128,7 +128,7 @@ def analyze_files(files, T: float, equil_ns: float, *, prod_ns: float | None = N
         tf = _xvg_temperature(f)
         if tf is not None and abs(tf - T) > 0.5:
             raise AnalysisError(f"{f}: dhdl file says T = {tf:g} K but the analysis uses "
-                                f"{T:g} K (setup.json / --temperature)")
+                                f"{T:g} K (setup.json)")
         try:
             u = extract_u_nk(str(f), T=T)
             h = extract_dHdl(str(f), T=T)
@@ -166,7 +166,10 @@ def analyze_files(files, T: float, equil_ns: float, *, prod_ns: float | None = N
         dg_mbar = float(mbar.delta_f_.iloc[0, -1]) * kT
         err_mbar = float(mbar.d_delta_f_.iloc[0, -1]) * kT
         overlap = np.asarray(mbar.overlap_matrix)
-        pairs = [overlap[a, b] for a, b in zip(sampled[:-1], sampled[1:])]
+        # the overlap matrix is asymmetric when the windows' sample counts differ:
+        # judge each neighbour pair by the smaller of its two entries
+        pairs = [min(overlap[a, b], overlap[b, a])
+                 for a, b in zip(sampled[:-1], sampled[1:])]
         min_ov = float(min(pairs)) if pairs else math.nan
     except Exception as e:
         notes.append(f"{pre}MBAR failed ({type(e).__name__}: {e})")
@@ -441,8 +444,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("abfe", type=Path, help="folder made by abfe_setup.sh")
     p.add_argument("--equil-ns", type=float, default=0.5,
                    help="discard the first N ns of every production window (default 0.5)")
-    p.add_argument("--temperature", type=float, default=None,
-                   help="K; default: setup.json (the effective run temperature)")
     p.add_argument("--allow-missing", action="store_true",
                    help="analyse legs with missing windows instead of refusing")
     p.add_argument("--outdir", type=Path, default=None, help="default ABFE/results")
@@ -456,28 +457,36 @@ def _repeats(setup: dict, leg_dir: Path) -> list[int]:
     return sorted(int(p.name[3:]) for p in leg_dir.glob("rep*") if p.name[3:].isdigit())
 
 
-def run(args) -> Path:
-    abfe = args.abfe.resolve()
+def _read_inputs(abfe: Path):
+    """setup.json (+ boresch.json for a complex leg); unreadable/incomplete -> AnalysisError."""
     sj = abfe / "setup.json"
-    if not sj.is_file():
-        raise AnalysisError(f"{abfe}: no setup.json (not an abfe_setup folder)")
-    setup = json.loads(sj.read_text())
+    try:
+        setup = json.loads(sj.read_text())
+        legs_present = list(setup["legs"])
+        temps = {leg: float(setup["temperature"][leg]) for leg in legs_present}
+        setup["n_states"] = {leg: int(setup["n_states"][leg]) for leg in legs_present}
+        boresch = restr = None
+        if "complex" in legs_present:
+            boresch = json.loads((abfe / "boresch.json").read_text())
+            restr = float(boresch["dG_restr_off_kJ"])
+    except FileNotFoundError as e:
+        raise AnalysisError(f"{e.filename}: not found (is {abfe} an abfe_setup folder?)") from e
+    except (KeyError, ValueError) as e:
+        raise AnalysisError(f"{abfe}: setup.json/boresch.json unreadable or incomplete "
+                            f"({type(e).__name__}: {e})") from e
+    return setup, legs_present, temps, boresch, restr
+
+
+def run(args, argv=None) -> Path:
+    abfe = args.abfe.resolve()
+    setup, legs_present, temps, boresch, restr = _read_inputs(abfe)
     if args.equil_ns < 0:
         raise AnalysisError("--equil-ns must be >= 0")
-    legs_present = setup["legs"]
     if "solvent" not in legs_present:
         raise AnalysisError("setup.json has no solvent leg")
-    temps = {leg: float(args.temperature if args.temperature is not None
-                        else setup["temperature"][leg]) for leg in legs_present}
     T = temps["solvent"]
-    boresch, restr = None, None
     pre_warn = []
     if "complex" in legs_present:
-        bj = abfe / "boresch.json"
-        if not bj.is_file():
-            raise AnalysisError(f"{bj} missing (complex leg needs the restraint correction)")
-        boresch = json.loads(bj.read_text())
-        restr = float(boresch["dG_restr_off_kJ"])
         if abs(float(boresch.get("T", temps["complex"])) - temps["complex"]) > 0.5:
             pre_warn.append(f"boresch.json correction is for T = {boresch['T']:g} K but the "
                             f"analysis uses {temps['complex']:g} K")
@@ -512,9 +521,8 @@ def run(args) -> Path:
     warns = pre_warn + [m for m in missing if "no data" in m] + warnings(legs, comb)
     write_results(outdir, setup, legs, comb, warns, T=T, equil_ns=args.equil_ns,
                   boresch=boresch, abfe=abfe,
-                  args_line="abfe_analyze.sh " + " ".join(sys.argv[1:]
-                                                          if args._argv is None
-                                                          else args._argv))
+                  args_line="abfe_analyze.sh " + " ".join(
+                      sys.argv[1:] if argv is None else map(str, argv)))
     for est in ("MBAR", "TI"):
         v, e = comb["mean"][est]
         log(f"{comb['quantity']} ({est}) = {_f(v, e).strip()} kcal/mol")
@@ -537,10 +545,9 @@ def _quiet_alchemlyb() -> None:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     _quiet_alchemlyb()
-    args._argv = argv
     try:
-        run(args)
-    except (AnalysisError, KeyError, FileNotFoundError, ValueError) as e:
+        run(args, argv)
+    except AnalysisError as e:
         print(f"abfe_analyze: error: {e}", file=sys.stderr)
         raise SystemExit(1)
     return 0

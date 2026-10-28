@@ -67,6 +67,27 @@ def test_alchemtest_benzene(key):
     assert 0 < res.min_overlap <= 1
 
 
+def test_equil_ns_slicing():
+    """equil_ns > 0 == slicing(lower=ps) before decorrelation and MBAR."""
+    import alchemlyb
+    from alchemlyb.estimators import MBAR
+    from alchemlyb.parsing.gmx import extract_u_nk
+    from alchemlyb.preprocessing import decorrelate_u_nk, slicing
+    from alchemtest.gmx import load_benzene
+
+    files = load_benzene()["data"]["Coulomb"]
+    T = 300.0
+    res = an.analyze_files(files, T, equil_ns=0.1)
+    direct = MBAR().fit(alchemlyb.concat(
+        [decorrelate_u_nk(slicing(extract_u_nk(f, T=T), lower=100), method="dE")
+         for f in files]))
+    full = an.analyze_files(files, T, equil_ns=0.0)
+    kT = an.KB * T
+    assert res.dg_mbar == pytest.approx(direct.delta_f_.iloc[0, -1] * kT, abs=1e-6)
+    assert res.err_mbar == pytest.approx(direct.d_delta_f_.iloc[0, -1] * kT, abs=1e-6)
+    assert res.dg_mbar != pytest.approx(full.dg_mbar, abs=1e-9)  # the slice did something
+
+
 def test_alchemtest_abfe_complex_multicomponent():
     """Complex leg with coul/vdw/bonded lambdas: TI sums all components, close to MBAR."""
     from alchemtest.gmx import load_ABFE
@@ -202,3 +223,46 @@ def test_wrapper_script(tmp_path):
                         "--equil-ns", "0"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (abfe / "results" / "abfe_result.csv").is_file()
+
+
+def test_no_temperature_option():
+    with pytest.raises(SystemExit):
+        an.build_parser().parse_args(["x", "--temperature", "300"])
+
+
+def test_bad_setup_is_clean_error(tmp_path, capsys):
+    abfe = _toy_abfe(tmp_path)
+    (abfe / "setup.json").write_text(json.dumps({"ligand": "LIG"}))  # no "legs"
+    with pytest.raises(SystemExit) as e:
+        an.main([str(abfe)])
+    assert e.value.code == 1 and "setup.json" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        an.main([str(tmp_path / "nonexistent")])
+
+
+def test_unexpected_errors_propagate(tmp_path, monkeypatch):
+    abfe = _toy_abfe(tmp_path)
+
+    def boom(*a, **k):
+        raise KeyError("bug")
+    monkeypatch.setattr(an, "analyze_leg", boom)
+    with pytest.raises(KeyError):
+        an.main([str(abfe), "--equil-ns", "0"])
+
+
+def test_min_overlap_uses_smaller_of_pair(monkeypatch):
+    """Asymmetric overlap matrix (unequal N_k): neighbour overlap = min(O[a,b], O[b,a])."""
+    from alchemlyb.estimators import MBAR
+    from alchemtest.gmx import load_benzene
+
+    class Fake(MBAR):
+        @property
+        def overlap_matrix(self):
+            n = len(self.states_)
+            m = np.full((n, n), 0.5)
+            m[0, 1] = 0.001   # forward entry tiny, reverse large
+            m[1, 0] = 0.4
+            return m
+    monkeypatch.setattr("alchemlyb.estimators.MBAR", Fake)
+    res = an.analyze_files(load_benzene()["data"]["Coulomb"], 300.0, equil_ns=0.0)
+    assert res.min_overlap == pytest.approx(0.001)
