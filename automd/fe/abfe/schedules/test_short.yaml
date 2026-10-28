@@ -1,0 +1,8 @@
+complex:
+  restraint: [0, 1]
+  coul: [0, 1]
+  vdw: [0, 1]
+solvent:
+  restraint: [0]
+  coul: [0, 1]
+  vdw: [0, 1]
