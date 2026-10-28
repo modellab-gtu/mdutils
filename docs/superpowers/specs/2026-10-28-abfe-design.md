@@ -116,8 +116,10 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
 - Ligand net charge q ≠ 0 means |q| ions of the opposite sign are perturbed alongside it:
   - q < 0: Na⁺ (or the K⁺ already in the box);
   - q > 0: Cl⁻.
-- In both legs the ions are picked from those already in the box. In the complex leg each must be at least 1.5 nm from protein and ligand in `start.gro`. If there are not enough ions, setup inserts them with `gmx insert-molecules` before EM, replacing waters, and keeps the box neutral.
-- **Topology:** the chosen ions are moved to the end of the molecule list as a new moleculetype `<ION>_ALCH`. The B-state has charge 0 and unchanged LJ, so its charge follows `coul-lambdas`. Their positions are restrained (flat-bottom 1.5 nm from the protein COM) to keep them away from the site.
+- In both legs the ions are picked from those already in the box. Each must be at least 1.5 nm from the ligand in `start.gro`; among those, the ions farthest from the protein are taken.
+  - The protein boxes have only about 1.2 nm of padding, so a protein-distance cutoff is not used.
+  - Opposite-sign ions always exist: the neutralising ions in the ligand box, and the 0.15 M salt in the complex box. If there are too few anyway, setup stops with an error telling the user to re-prepare with salt.
+- **Topology:** the chosen ions are moved to the end of the molecule list as a new moleculetype `<ION>_ALCH`. The B-state has charge 0 and unchanged LJ, so its charge follows `coul-lambdas`. Each ion has a flat-bottom position restraint (sphere of radius 0.5 nm around its start position, k = 1000 kJ mol⁻¹ nm⁻²), so it cannot drift into the site.
 - **Checks:** setup asserts that the total charge is 0 in state A and in state B. It also asserts that the ions and the ligand are both at full charge when Coulomb λ = 0 and both at zero charge when Coulomb λ = 1.
 
 ## Analysis (`abfe_analyze.sh`)
