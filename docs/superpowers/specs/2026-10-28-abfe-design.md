@@ -62,7 +62,7 @@ ABFE/
 
 ## λ schedule (default; `--schedule` YAML overrides)
 
-Each leg uses one MDP set with full lambda vectors (`restraint-lambdas`, `coul-lambdas`, `vdw-lambdas`). The states are ordered as restraint on → Coulomb off → vdW off.
+Each leg uses one MDP set with full lambda vectors (`restraint-lambdas` and `bonded-lambdas` (identical), `coul-lambdas`, `vdw-lambdas`). The states are ordered as restraint on → Coulomb off → vdW off.
 
 - **Complex (36 states):**
   - restraint: 0, 0.05, 0.1, 0.2, 0.5, 1.0;
@@ -85,7 +85,8 @@ FE MDP settings:
 - sd integrator, 2 fs, `constraints = h-bonds`;
 - `couple-moltype = LIG`, `couple-lambda0 = vdw-q`, `couple-lambda1 = none`, `couple-intramol = no`;
 - `sc-alpha = 0.5`, `sc-power = 1`, `sc-r-power = 6`;
-- `separate-dhdl-file = yes`.
+- `separate-dhdl-file = yes`;
+- `refcoord-scaling = com` in the barostat stages (needed with the co-alchemical ion's position restraint).
 
 Cutoffs, PME and tc-grps come from the run folder's `md.mdp`.
 
@@ -103,7 +104,7 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
 ## Boresch restraint (complex leg)
 
 - MDRestraintsGenerator 0.2.1 `FindBoreschRestraint` runs on `md_<r>.tpr/xtc`. Ligand atoms are the `--ligand` residue; host atoms are protein backbone.
-- The script writes the restraint as `[ intermolecular_interactions ]` in `topol_fe.top`. It uses a bond (type 6) plus angles (type 1) and dihedrals (type 2) with A-state force constant 0 and B-state full force constant, controlled by `restraint-lambdas`.
+- The script writes the restraint as `[ intermolecular_interactions ]` in `topol_fe.top`. It uses a bond (type 6) plus angles (type 1) and dihedrals (type 2) with A-state force constant 0 and B-state full force constant, controlled by `bonded-lambdas`. GROMACS switches `[ intermolecular_interactions ]` bond, angle and dihedral terms with `bonded-lambdas`, not `restraint-lambdas` (verified by rerun in Task 6), so both are set to the same schedule.
 - The analytic release correction (Boresch et al. 2003, eq. 32) at the run temperature is
 
   `ΔG_restr,off = −kT ln[ 8π² V° √(K_r K_θA K_θB K_φA K_φB K_φC) / (r0² sinθA0 sinθB0 (2πkT)³) ]`
@@ -116,7 +117,8 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
 - Ligand net charge q ≠ 0 means |q| ions of the opposite sign are perturbed alongside it:
   - q < 0: Na⁺ (or the K⁺ already in the box);
   - q > 0: Cl⁻.
-- In both legs the ions are picked from those already in the box. Each must be at least 1.5 nm from the ligand in `start.gro`; among those, the ions farthest from the protein are taken.
+- In both legs the ions are picked from those already in the box. Each must be at least d_min = min(1.5 nm, 0.45 × shortest box edge) from the ligand in `start.gro`; among those, the ions farthest from the protein are taken.
+  - If too few ions qualify (for example, a single neutralising ion sitting next to the ligand in a small ligand box), the ion is swapped with the water molecule farthest from the ligand. The whole water is moved to the ion's site and the ion to the water's site, and EM removes any clash.
   - The protein boxes have only about 1.2 nm of padding, so a protein-distance cutoff is not used.
   - Opposite-sign ions always exist: the neutralising ions in the ligand box, and the 0.15 M salt in the complex box. If there are too few anyway, setup stops with an error telling the user to re-prepare with salt.
 - **Topology:** the chosen ions are moved to the end of the molecule list as a new moleculetype `<ION>_ALCH`. The B-state has charge 0 and unchanged LJ, so its charge follows `coul-lambdas`. Each ion has a flat-bottom position restraint (sphere of radius 0.5 nm around its start position, k = 1000 kJ mol⁻¹ nm⁻²), so it cannot drift into the site.
