@@ -44,6 +44,12 @@ def fe_mdps(base: dict, s: Schedule, ligand: str, state: int, prod_ns: float,
         "dhdl-print-energy": "total",
         "separate-dhdl-file": "yes",
         "restraint-lambdas": _lam(s.restraint),
+        # The Boresch restraint lives in [ intermolecular_interactions ] as
+        # bond/angle/dihedral (bonded) terms, which GROMACS switches with
+        # bonded-lambdas, NOT restraint-lambdas (that one only covers dihedral
+        # restraints and pull restraints). No other bonded term has a B state
+        # (couple-intramol = no), so bonded-lambdas == restraint schedule.
+        "bonded-lambdas": _lam(s.restraint),
         "coul-lambdas": _lam(s.coul),
         "vdw-lambdas": _lam(s.vdw),
         "init-lambda-state": str(state),

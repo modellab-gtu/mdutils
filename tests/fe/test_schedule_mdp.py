@@ -66,6 +66,7 @@ def test_fe_mdp_keys(lig_rundir):
         assert k["sc-alpha"] == "0.5" and k["couple-lambda0"] == "vdw-q"
         assert len(k["vdw-lambdas"].split()) == 31
         assert k["restraint-lambdas"].split()[0] == "0.0000"
+        assert k["bonded-lambdas"] == k["restraint-lambdas"]
 
 
 def test_write_window_mdps(lig_rundir, tmp_path):
