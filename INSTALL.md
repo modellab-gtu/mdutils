@@ -71,6 +71,21 @@ conda install -y -n mdutils ambertools --channel conda-forge --override-channels
 
 ---
 
+## Free energy analysis packages (ABFE / hydration)
+
+Needed by `abfe_setup.sh` / `abfe_analyze.sh` (versions in use):
+
+```bash
+pip install alchemlyb==2.5.0 pymbar==4.0.3
+pip install --no-deps MDRestraintsGenerator==0.2.1   # --no-deps: its metadata pins scipy<1.8
+pip install alchemtest                               # tests only
+```
+
+On the GTU cluster these live in `/cta/capps/envs/ligparam`; scipy there needs that environment's libstdc++, so the
+launchers set `LD_LIBRARY_PATH=/cta/capps/envs/ligparam/lib` (do the same when running `python -m pytest tests/fe`).
+
+---
+
 ## Gaussian 16 (RESP charges only)
 
 Gaussian 16 is commercial software and cannot be installed via conda.
