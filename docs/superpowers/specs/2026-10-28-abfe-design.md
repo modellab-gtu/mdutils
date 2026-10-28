@@ -109,7 +109,7 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
 
   `ΔG_restr,off = −kT ln[ 8π² V° √(K_r K_θA K_θB K_φA K_φB K_φC) / (r0² sinθA0 sinθB0 (2πkT)³) ]`
 
-  with V° = 1.6605 nm³. It is stored in `boresch.json`.
+  with V° = 1.66054 nm³. It is stored in `boresch.json`.
 - **Guard:** an anchor angle within 10° of 0° or 180° is an error, unless `--force-restraint` is given.
 
 ## Charged ligands: co-alchemical counter-ion
