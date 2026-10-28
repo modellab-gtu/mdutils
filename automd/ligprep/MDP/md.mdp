@@ -3,7 +3,7 @@
 integrator               = sd
 tinit                    = 0
 dt                       = 0.002              ; 2 fs timestep (h-bonds constraints)
-nsteps                   = 50000000           ; 100 ns
+nsteps                   = 5000000           ; 10 ns
 nstcomm                  = 100
 ; Output control
 nstxout                  = 0
@@ -35,7 +35,7 @@ epsilon_surface          = 0
 ; Replace "LIG" with your actual ligand residue name — see prep script output
 tc-grps                  = LIG Water_and_ions
 tau_t                    = 1.0   1.0
-ref_t                    = 310   310
+ref_t                    = 300   300
 ; Pressure coupling - C-rescale (stochastic cell rescaling)
 Pcoupl                   = C-rescale
 pcoupltype               = isotropic
