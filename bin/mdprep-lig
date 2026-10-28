@@ -1,0 +1,3 @@
+#!/bin/bash
+# ligand-in-water GROMACS/Amber preparation (automd/ligprep/prepare_lig_md.sh); options: mdprep-lig -h
+exec "$(dirname "$(readlink -f "$0")")/../automd/ligprep/prepare_lig_md.sh" "$@"

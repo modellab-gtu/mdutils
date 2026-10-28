@@ -29,6 +29,7 @@ FF="amber99sb-ildn"
 WATER="tip3p"
 BOXTYPE="dodecahedron"
 BOXDIST="1.0"
+MIN_IMAGE="3.2"            # nm: minimum distance between periodic images (2 x cut-off + margin)
 SALT_CONC="0.0"           # NaCl concentration (mol/L) added on top of neutralising ions
 IONS_MDP=""
 EM_MDP=""
@@ -41,6 +42,19 @@ USE_PARMED=0
 CHARGE_METHOD="bcc"
 LIG_CHARGE=0
 LIG_MULT=1
+# MD run files (written after preparation)
+CLUSTER="gtu"              # gtu (cws01/cws02) or truba
+MD_NODE="cws01"            # gtu: cws01 = GPU, cws02 = CPU
+REPLICAS=1
+EM_MODE="${MDUTILS_EM:-inline}"   # inline = minimise now; job = leave EM to run_em.sbatch (module default: job)
+SUBMIT=0
+TRUBA_ACCOUNT="${USER}"
+TRUBA_PARTITION="orfoz"
+TRUBA_NTASKS=1               # one MPI rank with OpenMP threads: a ~3 nm ligand box cannot be split into MPI domains
+TRUBA_OMP=16                  # OpenMP threads per rank
+TRUBA_GMX_MODULE="apps/gromacs/2024.1-oneapi2024"
+TRUBA_TIME="3-00:00:00"
+LIG_PH=""                  # optional: re-protonate the ligand with Open Babel at this pH
 RESP_OPT="yes"
 NPROC=32
 MEM="20GB"
@@ -66,7 +80,19 @@ Input modes:
 
 General options:
   -l, --ligand RES             Ligand residue/molecule name (required), default: ${LIGID}
-      --local-ligand FILE      Local ligand file (PDB, SDF, MOL2, …)
+      --local-ligand FILE      Local ligand: SDF or MOL2 with explicit H and formal charges
+                               (preferred; used as is), or PDB (bond orders guessed)
+      --lig-ph PH              Re-protonate the ligand with Open Babel at this pH (off by default)
+
+MD run files (written to the output folder: MDP/ with tc-grps filled in, run_em.sbatch, run_md.sbatch, submit_md.sh):
+      --cluster gtu|truba      Target cluster, default: ${CLUSTER}
+      --md-node cws01|cws02    GTU node: cws01 = GPU, cws02 = CPU, default: ${MD_NODE}
+      --replicas N             Independent replicas (Slurm array), default: ${REPLICAS}
+      --em inline|job          Minimise now, or leave it to run_em.sbatch, default: ${EM_MODE} (truba: job)
+      --submit                 Submit EM + MD at the end (GTU only)
+      --truba-account/-partition/-ntasks/-omp/-gmx-module/-time   TRUBA settings, defaults:
+                               ${TRUBA_ACCOUNT} / ${TRUBA_PARTITION} / ${TRUBA_NTASKS} ranks / ${TRUBA_OMP} threads per rank /
+                               ${TRUBA_GMX_MODULE} / ${TRUBA_TIME}
   -p, --pdb ID                 RCSB PDB ID for ligand extraction
       --lig-chain CHAIN        Ligand chain ID (RCSB mode, selects specific copy)
       --lig-resi RESI          Ligand residue number (RCSB mode)
@@ -74,7 +100,9 @@ General options:
                                (also controls auto-routing: AMBER-only FFs → parmed pathway)
   -w, --water NAME             Water model, default: ${WATER}
   -b, --boxtype TYPE           Box type, default: ${BOXTYPE}
-  -d, --distance NM            Solvent box padding in nm, default: ${BOXDIST}
+  -d, --distance NM            Solvent box padding in nm, default: ${BOXDIST} (widened for small ligands so
+                               periodic images are at least --min-image apart)
+      --min-image NM           Minimum distance between periodic images, default: ${MIN_IMAGE}
   -s, --salt M                 NaCl concentration in mol/L on top of neutralising ions, default: ${SALT_CONC}
       --ions-mdp FILE          ions.mdp path (default: MDP/ions.mdp if present, else bundled)
       --em-mdp FILE            em.mdp path  (default: MDP/em.mdp  if present, else bundled)
@@ -138,6 +166,18 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -p|--pdb)            PROID="$2"; INPUT_MODE="rcsb"; shift 2 ;;
         -l|--ligand)         LIGID="$2"; LIGID_USER_SET=1; shift 2 ;;
+        --lig-ph)      LIG_PH="$2"; shift 2 ;;
+        --cluster)     CLUSTER="$2"; shift 2 ;;
+        --md-node)     MD_NODE="$2"; shift 2 ;;
+        --replicas)    REPLICAS="$2"; shift 2 ;;
+        --em)          EM_MODE="$2"; shift 2 ;;
+        --submit)      SUBMIT=1; shift ;;
+        --truba-account) TRUBA_ACCOUNT="$2"; shift 2 ;;
+        --truba-partition) TRUBA_PARTITION="$2"; shift 2 ;;
+        --truba-omp) TRUBA_OMP="$2"; shift 2 ;;
+        --truba-ntasks) TRUBA_NTASKS="$2"; shift 2 ;;
+        --truba-gmx-module) TRUBA_GMX_MODULE="$2"; shift 2 ;;
+        --truba-time)  TRUBA_TIME="$2"; shift 2 ;;
         --local-ligand)      LOCAL_LIGAND_PDB="$2"; LOCAL_LIGAND_GIVEN=1; shift 2 ;;
         --lig-chain)         LIGCHAIN="$2"; shift 2 ;;
         --lig-resi)          LIGRESI="$2"; shift 2 ;;
@@ -145,6 +185,7 @@ while [[ $# -gt 0 ]]; do
         -w|--water)          WATER="$2"; shift 2 ;;
         -b|--boxtype)        BOXTYPE="$2"; shift 2 ;;
         -d|--distance)       BOXDIST="$2"; shift 2 ;;
+        --min-image)         MIN_IMAGE="$2"; shift 2 ;;
         -s|--salt)           SALT_CONC="$2"; shift 2 ;;
         --ions-mdp)          IONS_MDP="$2"; shift 2 ;;
         --em-mdp)            EM_MDP="$2"; shift 2 ;;
@@ -184,6 +225,12 @@ case "$RESP_OPT" in
 esac
 
 [[ "$LIG_CHARGE" =~ ^-?[0-9]+$ ]] || die "--charge must be an integer, got: $LIG_CHARGE"
+case "$CLUSTER" in gtu|truba) ;; *) die "--cluster must be gtu or truba" ;; esac
+case "$MD_NODE" in cws01|cws02) ;; *) die "--md-node must be cws01 or cws02" ;; esac
+case "$EM_MODE" in inline|job) ;; *) die "--em must be inline or job" ;; esac
+[[ "$REPLICAS" =~ ^[1-9][0-9]*$ ]] || die "--replicas must be a positive integer, got: $REPLICAS"
+[[ "$CLUSTER" == "truba" ]] && EM_MODE="job"   # TRUBA's GROMACS cannot read tpr files written by 2026.1
+[[ -z "$LIG_PH" || "$LIG_PH" =~ ^[0-9]*\.?[0-9]+$ ]] || die "--lig-ph must be a number, got: $LIG_PH"
 [[ "$LIG_MULT"   =~ ^[0-9]+$  ]]  || die "--mult must be a positive integer, got: $LIG_MULT"
 [[ "$NPROC"      =~ ^[0-9]+$  ]]  || die "--nproc must be a positive integer, got: $NPROC"
 
@@ -344,13 +391,6 @@ copy_local_ligand() {
         obabel "$src" -O "$LIGAND_PDB" 2>/dev/null \
             || die "obabel failed to convert local ligand (${ext}) to PDB"
         [[ -s "$LIGAND_PDB" ]] || die "obabel produced empty PDB from local ligand"
-        # Net charge from the formal charges obabel writes in PDB columns 79-80 must match --charge
-        local fc
-        fc=$(awk '/^(ATOM|HETATM)/{c=substr($0,79,2); gsub(/ /,"",c); if(c!=""){s=substr(c,length(c),1); v=substr(c,1,length(c)-1); if(v=="")v=1; q+=(s=="-"?-v:v)}}END{print q+0}' "$LIGAND_PDB")
-        if [[ "$fc" != "$LIG_CHARGE" ]]; then
-            die "Formal charges in ${src##*/} sum to ${fc}, but --charge is ${LIG_CHARGE}. Fix the protonation or --charge."
-        fi
-        log "Ligand net formal charge from ${ext} file: ${fc} (matches --charge)"
     fi
     log "Local ligand copied to ${LIGAND_PDB}"
 }
@@ -472,11 +512,68 @@ PYEOF
     [[ $? -eq 0 ]] || die "Coordinate grafting failed (atom count mismatch between ${1} and ${2})"
 }
 
+effective_box_padding() {
+    # Padding (nm) so that ligand size + 2 x padding >= MIN_IMAGE: with a small ligand the default 1 nm padding
+    # gives a box shorter than twice the cut-off (grompp then refuses the MD steps).
+    python3 - "$LIG_H_MOL2" "$BOXDIST" "$MIN_IMAGE" <<'EOF_PAD'
+import sys, itertools, math
+xyz, sect = [], None
+for ln in open(sys.argv[1]):
+    if ln.startswith("@<TRIPOS>"): sect = ln.strip(); continue
+    if sect == "@<TRIPOS>ATOM" and ln.strip(): f = ln.split(); xyz.append(tuple(map(float, f[2:5])))
+ext = max((math.dist(a, b) for a, b in itertools.combinations(xyz, 2)), default=0.0) / 10.0
+d, m = float(sys.argv[2]), float(sys.argv[3])
+print(f"{max(d, (m - ext) / 2):.3f}")
+EOF_PAD
+}
+
+tleap_water() {
+    # --water -> tleap water leaprc and solvent box (tleap+parmed route). Echoes "<leaprc> <box>".
+    case "$WATER" in
+        tip3p)   echo "leaprc.water.tip3p TIP3PBOX" ;;
+        spce)    echo "leaprc.water.spce SPCBOX" ;;
+        opc3)    echo "leaprc.water.opc3 OPC3BOX" ;;
+        tip3pfb|fb3) echo "leaprc.water.fb3 FB3BOX" ;;
+        tip4pew) echo "leaprc.water.tip4pew TIP4PEWBOX" ;;
+        opc)     echo "leaprc.water.opc OPCBOX" ;;
+        *) die "--water ${WATER} is not supported by the tleap+parmed route (use tip3p, spce, opc3, fb3, tip4pew or opc)" ;;
+    esac
+}
+
+gmx_solvent_box() {
+    # 4- and 5-site waters need their own pre-equilibrated box for gmx solvate
+    case "$WATER" in
+        tip4p*) echo "tip4p.gro" ;;
+        tip5p)  echo "tip5p.gro" ;;
+        *)      echo "spc216.gro" ;;
+    esac
+}
+
+build_ligand_h() {
+    # Protonated ligand with correct bond orders and formal charges (automd/common/ligand_input.py):
+    # SDF/MOL2 input is used as is; an RCSB ligand gets bond orders from its CCD template; a plain PDB falls back
+    # to Open Babel's guess. Stops if the formal charges do not sum to --charge.
+    [[ -s "$LIG_H_MOL2" ]] && return 0
+    local args=(--charge "$LIG_CHARGE" --resname "$LIGID" --out "$LIG_H_MOL2")
+    [[ -n "$LIG_PH" ]] && args+=(--ph "$LIG_PH")
+    if (( LOCAL_LIGAND_GIVEN )); then
+        case "${LOCAL_LIGAND_PDB##*.}" in
+            sdf|SDF|mol|MOL) args+=(--sdf "$LOCAL_LIGAND_PDB") ;;
+            mol2|MOL2)       args+=(--mol2 "$LOCAL_LIGAND_PDB") ;;
+            *)               args+=(--pdb "$LIGAND_PDB") ;;
+        esac
+    else
+        args+=(--pdb "$LIGAND_PDB" --ccd "$LIGID")
+    fi
+    log "Building the protonated ligand ${LIG_H_MOL2}"
+    python3 "${SCRIPT_DIR}/../common/ligand_input.py" "${args[@]}" || die "Ligand preparation failed (see the message above)"
+    [[ -s "$LIG_H_MOL2" ]] || die "Ligand preparation did not write $LIG_H_MOL2"
+}
+
 prepare_ligand_antechamber() {
     log "Ligand charge route: antechamber (method=${CHARGE_METHOD})"
     log "Generating ligand mol2 with hydrogens"
-    obabel "$LIGAND_PDB" -O "$LIG_H_MOL2" -h
-    [[ -s "$LIG_H_MOL2" ]] || die "Open Babel failed to create $LIG_H_MOL2"
+    build_ligand_h
 
     log "Running antechamber (charge method: ${CHARGE_METHOD})"
     antechamber \
@@ -493,11 +590,10 @@ prepare_ligand_resp() {
     log "Ligand charge route: RESP through Gaussian16 + antechamber"
 
     log "Saving original ligand geometry as mol2 (coordinate reference)"
-    obabel "$LIGAND_PDB" -O "$LIG_H_MOL2" -h
-    [[ -s "$LIG_H_MOL2" ]] || die "Open Babel failed to create $LIG_H_MOL2"
+    build_ligand_h
 
     log "Generating ligand XYZ with hydrogens for Gaussian"
-    obabel "$LIGAND_PDB" -O "$LIG_XYZ" -h
+    obabel "$LIG_H_MOL2" -O "$LIG_XYZ"
     [[ -s "$LIG_XYZ" ]] || die "Open Babel failed to create $LIG_XYZ"
     tail -n +3 "$LIG_XYZ" > "$LIG_COORD"
     [[ -s "$LIG_COORD" ]] || die "Failed to create coordinate file $LIG_COORD"
@@ -753,15 +849,19 @@ prepare_system_parmed() {
         dodecahedron|octahedron) box_cmd="solvateOct" ;;
         *) box_cmd="solvateBox" ;;
     esac
-    box_dist_a=$(python3 -c "print(${BOXDIST} * 10)")
+    local pad; pad=$(effective_box_padding)
+    [[ "$pad" == "$(printf '%.3f' "$BOXDIST")" ]] || log "Box padding widened to ${pad} nm (small ligand; --min-image ${MIN_IMAGE} nm)"
+    box_dist_a=$(python3 -c "print(${pad} * 10)")
 
-    log "Building solvated ligand system with tleap (GAFF2 + TIP3P)"
-    local tleap_build npairs salt_cmd=""
+    log "Building solvated ligand system with tleap (GAFF2 + ${WATER})"
+    local tleap_build npairs salt_cmd="" water_leaprc water_box
+    read -r water_leaprc water_box <<<"$(tleap_water)"
+    [[ -n "$water_box" ]] || die "--water ${WATER} is not supported by the tleap+parmed route (tip3p, spce, opc3, fb3, tip4pew, opc)"
     tleap_build="source leaprc.gaff2
-source leaprc.water.tip3p
+source ${water_leaprc}
 loadamberparams ${AC_FRCMOD}
 LIG = loadMol2 ${AC_MOL2}
-${box_cmd} LIG TIP3PBOX ${box_dist_a}"
+${box_cmd} LIG ${water_box} ${box_dist_a}"
     npairs=$(salt_pairs_for "$tleap_build" LIG)
     log "Salt: ${SALT_CONC} M NaCl -> ${npairs} Na+/Cl- pairs (plus neutralising ions)"
     if (( npairs > 0 )); then salt_cmd="addIonsRand LIG Na+ ${npairs} Cl- ${npairs}"; fi
@@ -893,10 +993,12 @@ solvate_and_minimize() {
 
     if [[ "$USE_PARMED" -eq 0 ]]; then
         log "Creating box"
-        gmx editconf -f "$LIG_GMX_GRO" -o newbox.gro -bt "$BOXTYPE" -d "$BOXDIST"
+        local pad; pad=$(effective_box_padding)
+        [[ "$pad" == "$(printf '%.3f' "$BOXDIST")" ]] || log "Box padding widened to ${pad} nm (small ligand; --min-image ${MIN_IMAGE} nm)"
+        gmx editconf -f "$LIG_GMX_GRO" -o newbox.gro -bt "$BOXTYPE" -d "$pad"
 
         log "Solvating"
-        gmx solvate -cp newbox.gro -cs spc216.gro -p "$FINAL_TOP" -o solv.gro
+        gmx solvate -cp newbox.gro -cs "$(gmx_solvent_box)" -p "$FINAL_TOP" -o solv.gro
 
         log "Preparing ions"
         gmx grompp -f "$IONS_MDP" -c solv.gro -r solv.gro -p "$FINAL_TOP" -o ions.tpr -maxwarn 1
@@ -914,8 +1016,13 @@ solvate_and_minimize() {
     log "Preparing minimization"
     gmx grompp -f "$EM_MDP" -c "$em_coord" -r "$em_coord" -p "$FINAL_TOP" -o em.tpr
 
-    log "Running minimization"
-    gmx mdrun -v -deffnm em
+    EM_COORD="$em_coord"
+    if [[ "$EM_MODE" == "inline" ]]; then
+        log "Running minimization"
+        gmx mdrun -v -deffnm em
+    else
+        log "Minimization left to run_em.sbatch (--em job)"
+    fi
 }
 
 write_amber_inputs() {
@@ -1025,7 +1132,7 @@ cleanup_files() {
     log "Removing intermediates (use --verbose to keep all files)"
 
     rm -f "$LIGAND_PDB" "${RAW_PDB}" ligand_sites.tsv
-    rm -f "$LIG_H_MOL2" "$LIG_XYZ" "$LIG_COORD" "$AC_MOL2" "$AC_FRCMOD"
+    rm -f "$LIG_H_MOL2" "${LIG_H_MOL2%.mol2}.sdf" "$LIG_XYZ" "$LIG_COORD" "$AC_MOL2" "$AC_FRCMOD"
     rm -f ANTECHAMBER_*.AC ANTECHAMBER_*.AC0 ATOMTYPE.INF \
           sqm.in sqm.out sqm.pdb leap.log mdinfo mdout.mdp
 
@@ -1033,11 +1140,11 @@ cleanup_files() {
         rm -f "$AC_PRMTOP" "$AC_INPCRD"
         rm -f "$LIG_GMX_TOP" "$LIG_GMX_PDB"
         rm -f newbox.gro solv.gro ions.tpr
-        if [[ "$RUN_SOLVATE_MINIMIZE" -eq 1 ]]; then
+        if [[ "$RUN_SOLVATE_MINIMIZE" -eq 1 && -s em.gro ]]; then   # keep the EM input if EM is left to run_em.sbatch
             rm -f solv_ions.gro "$LIG_GMX_GRO" em.tpr em.edr em.log em.trr
         fi
     else
-        if [[ "$RUN_SOLVATE_MINIMIZE" -eq 1 ]]; then
+        if [[ "$RUN_SOLVATE_MINIMIZE" -eq 1 && -s em.gro ]]; then   # keep the EM input if EM is left to run_em.sbatch
             rm -f "$COMPLEX_GRO" em.tpr em.edr em.log em.trr
         fi
     fi
@@ -1102,6 +1209,12 @@ else
 fi
 
 solvate_and_minimize
+if [[ "$RUN_SOLVATE_MINIMIZE" -eq 1 ]]; then
+    RUN_MDP_SRC="$MDPDIR"; [[ -f "${MDPDIR}/md.mdp" ]] || RUN_MDP_SRC="$MDPDIR_BUNDLED"
+    # shellcheck source=../common/run_files.sh
+    source "${SCRIPT_DIR}/../common/run_files.sh"
+    write_run_files "${LIG_MOLNAME:-$LIGID} Water_and_ions"
+fi
 cleanup_files
 write_summary
 
