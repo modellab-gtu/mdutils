@@ -42,6 +42,7 @@ class MolType:
     # line index of each atom in Topology.lines and a snapshot to detect edits
     _lines: list[int] = field(default_factory=list, repr=False)
     _snap: list[tuple] = field(default_factory=list, repr=False)
+    _fresh: bool = field(default=True, repr=False)
 
     def charge(self, state: str = "A") -> float:
         return sum(a.qB if state == "B" else a.q for a in self.atoms)
@@ -69,21 +70,40 @@ def _fmt_atom(a: Atom) -> str:
 
 
 class Topology:
+    """Parsed view over the raw topology lines.
+
+    Atom edits (``MolType.atoms``) and ``molecules`` edits are flushed into
+    ``_lines`` before every structural operation and in ``write``; structural
+    operations re-index afterwards, so no stale indices exist.
+    """
+
     def __init__(self):
-        self.lines: list[str] = []
+        self._lines: list[str] = []
         self.moleculetypes: dict[str, MolType] = {}
         self.molecules: list[tuple[str, int]] = []
-        self._mol_lines: list[int] = []
         self._mol_snap: list[tuple[str, int]] = []
+
+    @property
+    def lines(self) -> list[str]:
+        self._sync()
+        return list(self._lines)
 
     @classmethod
     def parse(cls, path) -> "Topology":
         top = cls()
-        top.lines = Path(path).read_text().splitlines()
+        top._lines = Path(path).read_text().splitlines()
+        top._index()
+        return top
+
+    # -- indexing / syncing -------------------------------------------------
+    def _index(self) -> None:
+        old = self.moleculetypes
+        new: dict[str, MolType] = {}
         section = None
-        cur: MolType | None = None
+        cur = None
         expect_name = False
-        for i, raw in enumerate(top.lines):
+        mols: list[tuple[str, int]] = []
+        for i, raw in enumerate(self._lines):
             s = _clean(raw)
             if not s or s.startswith("#"):
                 continue
@@ -93,20 +113,113 @@ class Topology:
                 continue
             toks = s.split()
             if section == "moleculetype" and expect_name:
-                cur = MolType(toks[0], int(toks[1]) if len(toks) > 1 else 3)
-                top.moleculetypes[cur.name] = cur
+                if toks[0] in new:
+                    raise ValueError(f"duplicate moleculetype '{toks[0]}'")
+                cur = old.get(toks[0]) or MolType(toks[0])
+                cur.nrexcl = int(toks[1]) if len(toks) > 1 else 3
+                cur._lines = []
+                cur._fresh = toks[0] not in old
+                new[cur.name] = cur
                 expect_name = False
             elif section == "atoms" and cur is not None:
-                a = _parse_atom(toks)
-                cur.atoms.append(a)
                 cur._lines.append(i)
-                cur._snap.append(astuple(a))
+                if cur._fresh:
+                    cur.atoms.append(_parse_atom(toks))
             elif section == "molecules":
-                top.molecules.append((toks[0], int(toks[1])))
-                top._mol_lines.append(i)
-        top._mol_snap = list(top.molecules)
-        return top
+                mols.append((toks[0], int(toks[1])))
+        for mt in new.values():
+            mt._snap = [astuple(a) for a in mt.atoms]
+            mt._fresh = False
+            if len(mt._lines) != len(mt.atoms):
+                raise ValueError(f"atom count mismatch for {mt.name}")
+        self.moleculetypes = new
+        self.molecules = mols
+        self._mol_snap = list(mols)
 
+    def _section_range(self, name: str):
+        """(header_idx, end_idx) of a section; end is exclusive."""
+        hdr = None
+        for i, raw in enumerate(self._lines):
+            s = _clean(raw)
+            if s.startswith("["):
+                if hdr is not None:
+                    return hdr, i
+                if s.strip("[] \t").lower() == name:
+                    hdr = i
+        return (hdr, len(self._lines)) if hdr is not None else (None, None)
+
+    def _mol_data_range(self):
+        hdr, end = self._section_range("molecules")
+        if hdr is None:
+            return None
+        idx = [i for i in range(hdr + 1, end)
+               if _clean(self._lines[i]) and not _clean(self._lines[i]).startswith("#")]
+        return (idx[0], idx[-1] + 1) if idx else (hdr + 1, hdr + 1)
+
+    def _sync(self) -> None:
+        for key, mt in self.moleculetypes.items():
+            if key != mt.name or mt._fresh:
+                raise ValueError(
+                    f"moleculetype '{mt.name}' was not added through "
+                    "add_moleculetype and cannot be written")
+        for mt in self.moleculetypes.values():
+            for k, (a, idx) in enumerate(zip(mt.atoms, mt._lines)):
+                if astuple(a) != mt._snap[k]:
+                    self._lines[idx] = _fmt_atom(a)
+                    mt._snap[k] = astuple(a)
+        if self.molecules != self._mol_snap:
+            self._apply_molecules(self.molecules)
+
+    def _apply_molecules(self, mols) -> None:
+        rng = self._mol_data_range()
+        if rng is None:
+            raise ValueError("topology has no [ molecules ] section")
+        new = [f"{n:<12s} {c}" for n, c in mols]
+        self._lines[rng[0]:rng[1]] = new
+        self.molecules = list(mols)
+        self._mol_snap = list(mols)
+
+    # -- public structural operations ---------------------------------------
+    def add_moleculetype(self, name: str, text: str, after: str | None = None) -> MolType:
+        """Insert a full ``[ moleculetype ]`` block (default: before [ system ])."""
+        self._sync()
+        if name in self.moleculetypes:
+            raise ValueError(f"moleculetype '{name}' already exists")
+        block = text.rstrip("\n").splitlines() + [""]
+        if after is not None:
+            mt = self.require_moleculetype(after)
+            start = mt._lines[0]
+            while not _clean(self._lines[start]).startswith("[") or \
+                    _clean(self._lines[start]).strip("[] \t").lower() != "moleculetype":
+                start -= 1
+            pos = len(self._lines)
+            for i in range(mt._lines[-1] + 1, len(self._lines)):
+                s = _clean(self._lines[i])
+                if s.startswith("[") and s.strip("[] \t").lower() in ("moleculetype", "system"):
+                    pos = i
+                    break
+        else:
+            pos, _ = self._section_range("system")
+            if pos is None:
+                pos = len(self._lines)
+        self._lines[pos:pos] = block
+        self._index()
+        return self.require_moleculetype(name)
+
+    def set_molecules(self, mols: list[tuple[str, int]]) -> None:
+        self._sync()
+        for n, _ in mols:
+            self.require_moleculetype(n)
+        self._apply_molecules(list(mols))
+        self._index()
+
+    def append_section(self, text: str) -> None:
+        """Append raw text (e.g. [ intermolecular_interactions ]) at the end."""
+        self._sync()
+        self._lines.extend([""] + text.rstrip("\n").splitlines())
+        self._index()
+
+    # -- queries --------------------------------------------------------------
     def require_moleculetype(self, name: str) -> MolType:
         if name not in self.moleculetypes:
             raise ValueError(
@@ -121,18 +234,8 @@ class Topology:
         return total
 
     def write(self, path) -> None:
-        out = list(self.lines)
-        for mt in self.moleculetypes.values():
-            for a, idx, snap in zip(mt.atoms, mt._lines, mt._snap):
-                if astuple(a) != snap:
-                    out[idx] = _fmt_atom(a)
-        if self.molecules != self._mol_snap:
-            if not self._mol_lines:
-                raise ValueError("topology has no [ molecules ] section to edit")
-            first, last = self._mol_lines[0], self._mol_lines[-1]
-            new = [f"{n:<12s} {c}" for n, c in self.molecules]
-            out[first:last + 1] = new
-        Path(path).write_text("\n".join(out) + "\n")
+        self._sync()
+        Path(path).write_text("\n".join(self._lines) + "\n")
 
 
 def ligand_charge(top: Topology, ligand: str) -> int:
@@ -149,14 +252,13 @@ def preprocess(run: RunDir, outdir: Path) -> Path:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     out = outdir / "processed.top"
-    em = run.path / "MDP" / "em.mdp"
     with tempfile.TemporaryDirectory(dir=outdir, prefix="pp_") as td:
-        if not em.is_file():
-            em = Path(td) / "em.mdp"
-            write_mdp({"integrator": "steep", "nsteps": 1}, em)
+        # minimal, define-free mdp: FE windows use no #define restraints
+        em = Path(td) / "pp.mdp"
+        write_mdp({"integrator": "steep", "nsteps": 0}, em)
         cmd = ["gmx", "grompp", "-f", str(em), "-c", str(run.md_gro),
-               "-r", str(run.md_gro), "-p", str(run.top), "-pp", str(out.resolve()),
-               "-o", str(Path(td) / "pp.tpr"), "-maxwarn", "2"]
+               "-p", str(run.top), "-pp", str(out.resolve()),
+               "-o", str(Path(td) / "pp.tpr"), "-maxwarn", "0"]
         r = subprocess.run(cmd, cwd=td,
                            capture_output=True, text=True,
                            env={**os.environ, "GMX_MAXBACKUP": "-1"})
