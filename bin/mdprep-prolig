@@ -1,0 +1,3 @@
+#!/bin/bash
+# protein-ligand GROMACS/Amber preparation (automd/prolig_normalMD/prepare_prolig_md.sh); options: mdprep-prolig -h
+exec "$(dirname "$(readlink -f "$0")")/../automd/prolig_normalMD/prepare_prolig_md.sh" "$@"
