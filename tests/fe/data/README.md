@@ -11,3 +11,7 @@ the folder names). Tests skip when a folder is missing.
 - jz4_lig_run: JZ4 in water, made with
   `mdprep-lig --local-ligand jz4_h.sdf --ligand JZ4 --charge 0 --md-node cws02 --replicas 1 --em job --outdir jz4_lig`
   then copied to jz4_lig_run with nvt/npt nsteps=5000, md nsteps=10000, array 0-0, `bash submit_md.sh`.
+  Note: this run's index.ndx was hand-patched with a `[ Water_and_ions ]` group before the run_files.sh fix
+  (the ion-free box had none, so grompp failed). With the fix (commit "run_files: create Water_and_ions tc
+  group when the box has no ions") a fresh `mdprep-lig` run needs no patch. The unpatched original is kept as
+  fixtures/jz4_lig and is the input of tests/fe/test_run_files.py.

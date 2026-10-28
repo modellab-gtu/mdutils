@@ -1,3 +1,5 @@
+"""Tests need LD_LIBRARY_PATH=/cta/capps/envs/ligparam/lib (system libstdc++ lacks CXXABI_1.3.15 for scipy)."""
+
 def test_versions():
     import alchemlyb, pymbar, MDRestraintsGenerator, MDAnalysis
     assert alchemlyb.__version__.startswith("2.5")

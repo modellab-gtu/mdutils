@@ -23,6 +23,17 @@ write_run_files() {
                 printf 'r %s\nname %s %s\nq\n' "$LIGID" "$n" "$LIGID" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
                 grep -q "^\[ ${g} \]" index.ndx && log "Added index group [ ${g} ] (residue name ${LIGID})" && continue
             fi
+            if [[ "$g" == "Water_and_ions" ]]; then
+                # a box without ions has no Water_and_ions group: build it from Water (or SOL) plus Ion if present
+                local w=Water n; n=$(grep -c '^\[' index.ndx)
+                grep -q '^\[ Water \]' index.ndx || w=SOL
+                if grep -q '^\[ Ion \]' index.ndx; then
+                    printf '"%s" | "Ion"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
+                else
+                    printf '"%s"\nname %s %s\nq\n' "$w" "$n" "$g" | gmx make_ndx -f "$EM_COORD" -n index.ndx -o index.ndx >/dev/null 2>&1
+                fi
+                grep -q "^\[ ${g} \]" index.ndx && log "Added index group [ ${g} ] (${w} group, no ions in the box)" && continue
+            fi
             log "Warning: tc group [ ${g} ] is not in index.ndx; edit tc-grps in MDP/*.mdp"
         done
     fi
