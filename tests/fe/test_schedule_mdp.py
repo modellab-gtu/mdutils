@@ -75,3 +75,13 @@ def test_write_window_mdps(lig_rundir, tmp_path):
                               "ACE", 3, 1.0, 1)
     assert [p.name for p in paths] == ["em.mdp", "nvt.mdp", "npt.mdp", "prod.mdp"]
     assert read_mdp(paths[3])["init-lambda-state"] == "3"
+
+
+def test_barostat_always_c_rescale():
+    """The spec mandates C-rescale in NPT/prod even if the run used another barostat."""
+    from automd.fe.abfe.mdp import fe_mdps
+    from automd.fe.abfe.schedule import default_schedule
+    base = {"pcoupl": "Parrinello-Rahman", "tau-p": "2.0", "ref-t": "300 300",
+            "tc-grps": "LIG Water_and_ions", "tau-t": "1 1"}
+    m = fe_mdps(base, default_schedule("solvent"), "LIG", 0, 1.0, 1)
+    assert m["npt"]["pcoupl"] == "C-rescale" and m["prod"]["pcoupl"] == "C-rescale"

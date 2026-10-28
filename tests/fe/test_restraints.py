@@ -153,7 +153,8 @@ def test_find_on_prolig(prolig_boresch):
 
 def test_grompp_with_block(prolig_boresch, tmp_path, gmx):
     """intermolecular_interactions appended after [ molecules ] of the define-free
-    processed topology grompps with an FE MDP (restraint-lambdas state 0 and 5)."""
+    processed topology grompps with an FE MDP (states 0 and 5; the block is
+    switched by bonded-lambdas)."""
     from automd.fe.abfe.mdp import fe_mdps
     from automd.fe.abfe.rundir import load_rundir, write_mdp
     from automd.fe.abfe.schedule import default_schedule

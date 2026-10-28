@@ -64,7 +64,8 @@ def fe_mdps(base: dict, s: Schedule, ligand: str, state: int, prod_ns: float,
              "nstenergy": "5000"}
         d.update(_copy(base, _COMMON + _TC + _CONSTR))
         if barostat:
-            d.update({"pcoupl": base.get("pcoupl", "C-rescale")})
+            # the spec mandates C-rescale whatever the run folder used
+            d["pcoupl"] = "C-rescale"
             d.update(_copy(base, _BARO))
             # co-alchemical ions carry flat-bottom position restraints
             d["refcoord-scaling"] = "com"

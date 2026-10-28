@@ -31,8 +31,10 @@ Units and sign
 GROMACS topology units, all harmonic as V = 1/2 k (x - x0)^2:
 bond funct 6: b0 nm, k kJ mol^-1 nm^-2; angle funct 1: theta0 deg,
 k kJ mol^-1 rad^-2; dihedral funct 2 (harmonic improper): xi0 deg,
-k kJ mol^-1 rad^-2. A state (restraint-lambda 0) has k = 0, B state
-(restraint-lambda 1) the full k; equilibrium values are identical in A and B.
+k kJ mol^-1 rad^-2. A state (bonded-lambda 0) has k = 0, B state
+(bonded-lambda 1) the full k; equilibrium values are identical in A and B.
+GROMACS switches [ intermolecular_interactions ] bonded terms with
+bonded-lambdas (the FE MDPs set bonded-lambdas = restraint-lambdas).
 
 ``boresch_correction`` returns dG_restr,off (kJ/mol, negative): the free
 energy of releasing the restraint on the decoupled ligand into the standard
@@ -196,7 +198,11 @@ def find_boresch(tpr, xtc, ligand_resname: str, T: float, *, max_frames: int = 2
         phiC0=float(rest.dihedrals[0].values[f]),
         frame=f * step,
     )
-    assert b.atoms[2] == rest.bond.atomgroup.ix[1] and b.atoms[3] == rest.bond.atomgroup.ix[0]
+    if not (b.atoms[2] == rest.bond.atomgroup.ix[1]
+            and b.atoms[3] == rest.bond.atomgroup.ix[0]):
+        raise RuntimeError(
+            f"MDRestraintsGenerator atom order changed: bond atoms "
+            f"{list(rest.bond.atomgroup.ix)} do not match P1/L1 {b.atoms[2]}/{b.atoms[3]}")
     if not force:
         check_collinear(b)
     return b
