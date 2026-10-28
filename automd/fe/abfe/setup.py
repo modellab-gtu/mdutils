@@ -84,10 +84,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def resolve_paths(args) -> None:
+    """Make every user-supplied path absolute (relative to the invocation cwd) before
+    anything changes directory or spawns a subprocess (grompp runs elsewhere).
+    A --schedule that is not an existing file is a schedule NAME and stays as is."""
+    for k in ("complex", "solvent", "outdir"):
+        v = getattr(args, k)
+        if v is not None:
+            setattr(args, k, Path(v).expanduser().resolve())
+    if args.schedule is not None:
+        p = Path(args.schedule).expanduser()
+        if p.is_file():
+            args.schedule = str(p.resolve())
+
+
 def resolve_schedule(spec: str | None) -> Path:
     if spec is None:
         return SCHEDULE_DIR / "default.yaml"
-    p = Path(spec)
+    p = Path(spec).expanduser()
     if p.is_file():
         return p.resolve()
     named = SCHEDULE_DIR / f"{spec}.yaml"
@@ -388,6 +402,7 @@ def node_opts(args, leg: str) -> dict:
 
 
 def run_setup(args, argv=None) -> Path:
+    resolve_paths(args)
     legs = [leg for leg in LEGS if getattr(args, leg) is not None]
     if not legs:
         raise SetupError("give --solvent (hydration) or --complex and --solvent (ABFE)")

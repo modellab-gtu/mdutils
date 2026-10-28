@@ -114,6 +114,28 @@ def test_setup_solvent_only(solvent_only, gmx):
     assert _grompp_all(gmx, solv) == 2 * 3 * 4
 
 
+def test_setup_relative_paths(lig_rundir, tmp_path, gmx, monkeypatch):
+    """Relative --solvent/--outdir and a schedule NAME work (grompp runs elsewhere)."""
+    parent = tmp_path / "work"
+    parent.mkdir()
+    (parent / "runs").mkdir()
+    (parent / "runs" / "lig").symlink_to(lig_rundir, target_is_directory=True)
+    before = _listing(lig_rundir)
+    monkeypatch.chdir(parent)
+    assert _setup(["--solvent", "runs/lig", "--ligand", "ACE", "--schedule", "test_short",
+                   "--repeats", "1", "--outdir", "ABFE_rel"]) == 0
+    out = parent / "ABFE_rel"
+    assert _listing(lig_rundir) == before
+    meta = json.loads((out / "setup.json").read_text())
+    assert Path(meta["outdir"]).is_absolute()
+    assert Path(meta["options"]["solvent"]).is_absolute()
+    assert Path(meta["options"]["outdir"]).is_absolute()
+    assert Path(meta["schedule_file"]).is_absolute()
+    assert Path(meta["sources"]["solvent"]["dir"]).is_absolute()
+    assert [w.name for w in _windows(out / "solvent", 0)] == ["lam_00", "lam_01", "lam_02"]
+    assert _grompp_all(gmx, out / "solvent") == 3 * 4
+
+
 def test_setup_full(prolig_rundir, jz4_lig_rundir, tmp_path, gmx, capsys):
     before = {d: _listing(d) for d in (prolig_rundir, jz4_lig_rundir)}
     out = tmp_path / "ABFE"
