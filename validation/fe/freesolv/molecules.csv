@@ -1,0 +1,17 @@
+res,name,freesolv_id,iupac,smiles,expt_kcal,d_expt_kcal
+F01,methanol,mobley_1636752,methanol,CO,-5.1,0.6
+F02,ethanol,mobley_2310185,ethanol,CCO,-5.0,0.6
+F03,1-butanol,mobley_1019269,butan-1-ol,CCCCO,-4.72,0.6
+F04,acetone,mobley_3867265,acetone,CC(=O)C,-3.8,0.6
+F05,ethyl acetate,mobley_6973347,ethyl acetate,CCOC(=O)C,-2.94,0.6
+F06,dimethyl ether,mobley_7015518,methoxymethane,COC,-1.91,0.6
+F07,benzene,mobley_3053621,benzene,c1ccccc1,-0.9,0.2
+F08,toluene,mobley_1873346,toluene,Cc1ccccc1,-0.9,0.2
+F09,phenol,mobley_20524,phenol,c1ccc(cc1)O,-6.6,0.2
+F10,anisole,mobley_7295828,anisole,COc1ccccc1,-2.45,0.6
+F11,chlorobenzene,mobley_7608462,chlorobenzene,c1ccc(cc1)Cl,-1.12,0.6
+F12,nitrobenzene,mobley_4193752,nitrobenzene,c1ccc(cc1)[N+](=O)[O-],-4.12,0.6
+F13,pyridine,mobley_296847,pyridine,c1ccncc1,-4.69,0.6
+F14,acetamide,mobley_8048190,acetamide,CC(=O)N,-9.71,0.6
+F15,cyclohexane,mobley_2689721,cyclohexane,C1CCCCC1,1.23,0.6
+F16,imidazole,mobley_7735340,imidazole,c1cnc[nH]1,-9.63,0.6
