@@ -75,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="replace an existing ABFE output folder")
     p.add_argument("--force-restraint", action="store_true",
                    help="accept a Boresch anchor angle within 10 deg of 0/180")
+    p.add_argument("--temperature", type=float, default=None,
+                   help="run every FE stage of both legs at T (K): overrides ref-t and "
+                        "gen-temp; required when the legs' md.mdp temperatures differ "
+                        "by > 0.5 K")
     p.add_argument("--submit", action="store_true",
                    help="run submit_abfe.sh at the end (gtu only)")
     return p
@@ -165,27 +169,59 @@ def build_index(gro: Path, out: Path, tcgrps: list[str], lig_res: str,
 
 
 def _gro_atoms(gro: Path):
+    """(resid, resname, atomname) per atom; the gro resid field is 5 wide (wraps)."""
     lines = gro.read_text().splitlines()
     n = int(lines[1])
-    return [(l[5:10].strip(), l[10:15].strip()) for l in lines[2:2 + n]]
+    return [(int(l[0:5]), l[5:10].strip(), l[10:15].strip()) for l in lines[2:2 + n]]
 
 
 def check_boresch_names(b, gro: Path) -> None:
-    """The six anchors' names (from md_<r>.tpr) must match start.gro at b.atoms."""
+    """The six anchors' names (``RESNAME+RESID:ATOM`` from md_<r>.tpr) must match
+    residue name, residue number (modulo 100000, the gro field width) and atom
+    name of start.gro at b.atoms."""
     atoms = _gro_atoms(gro)
     for idx, name in zip(b.atoms, b.names):
         resid_part, aname = name.rsplit(":", 1)
         if idx >= len(atoms):
             raise SetupError(f"Boresch atom {idx} ({name}) beyond {gro} ({len(atoms)} atoms)")
-        res, at = atoms[idx]
-        if at != aname[:5] or not resid_part.startswith(res):
+        resid, res, at = atoms[idx]
+        tail = resid_part[len(res):] if resid_part.startswith(res) else ""
+        ok = (at == aname[:5] and tail.lstrip("-").isdigit()
+              and int(tail) % 100000 == resid % 100000
+              and len(resid_part) - len(tail) <= 5)
+        if not ok:
             raise SetupError(f"Boresch atom {idx}: boresch.json says {name}, "
-                             f"{gro.name} has {res}:{at}")
+                             f"{gro.name} has {res}{resid}:{at}")
 
 
 def _ligand_signature(top: Topology, ligand: str):
+    """Per atom (name, type, mass, charge) of the ligand moleculetype."""
     mt = top.require_moleculetype(ligand)
-    return [a.name for a in mt.atoms], [a.q for a in mt.atoms]
+    return [(a.name, a.type, a.mass, a.q) for a in mt.atoms]
+
+
+def compare_ligands(ligand: str, a: list, b: list, qtol: float = 1e-3) -> None:
+    """The ligand must be the same molecule in both legs; raise naming the atoms."""
+    if len(a) != len(b):
+        raise SetupError(f"ligand {ligand}: {len(a)} atoms in --complex, {len(b)} in "
+                         "--solvent: not the same ligand")
+    bad = []
+    for i, (x, y) in enumerate(zip(a, b), 1):
+        why = []
+        if x[0] != y[0]:
+            why.append(f"name {x[0]}/{y[0]}")
+        if x[1] != y[1]:
+            why.append(f"type {x[1]}/{y[1]}")
+        if abs(x[2] - y[2]) > 1e-3:
+            why.append(f"mass {x[2]:g}/{y[2]:g}")
+        if abs(x[3] - y[3]) > qtol:
+            why.append(f"charge {x[3]:+.4f}/{y[3]:+.4f}")
+        if why:
+            bad.append(f"#{i} {x[0]} ({', '.join(why)})")
+    if bad:
+        raise SetupError(f"ligand {ligand} differs between --complex and --solvent "
+                         f"(complex/solvent): {'; '.join(bad[:10])}"
+                         + (f"; ... {len(bad) - 10} more" if len(bad) > 10 else ""))
 
 
 def _versions() -> dict:
@@ -233,6 +269,11 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         raise SetupError(f"{leg}: ligand {lig} appears {n_lig} times in [ molecules ] (need 1)")
     lig_res = mt.atoms[0].res
     q = ligand_charge(top, lig)
+    T = args.temperature if args.temperature is not None else run.temperature
+    base = dict(run.md_mdp)
+    if args.temperature is not None:
+        n_tc = len(base["ref-t"].split())
+        base["ref-t"] = " ".join([f"{T:g}"] * n_tc)   # gen-temp follows ref-t
     start, posre = leg_dir / "start.gro", leg_dir / "posre_ref.gro"
 
     ions = []
@@ -260,8 +301,13 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         from .restraints import check_collinear, find_boresch, to_json
         log("complex: searching Boresch anchors (MDRestraintsGenerator) on "
             f"{run.md_tpr.name}/{run.md_xtc.name}")
-        b_md = find_boresch(run.md_tpr, run.md_xtc, lig_res, run.temperature,
-                            force=args.force_restraint)
+        # MDAnalysis writes .<xtc>_offsets.npz/.lock next to the trajectory it
+        # opens: read symlinks in a scratch folder so the run folder stays untouched
+        with tempfile.TemporaryDirectory(dir=outdir, prefix=".mdrg_") as td:
+            tpr, xtc = Path(td) / run.md_tpr.name, Path(td) / run.md_xtc.name
+            tpr.symlink_to(run.md_tpr.resolve())
+            xtc.symlink_to(run.md_xtc.resolve())
+            b_md = find_boresch(tpr, xtc, lig_res, T, force=args.force_restraint)
         if args.force_restraint:
             try:
                 check_collinear(b_md)
@@ -272,7 +318,7 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         check_boresch_names(b, start)
         from .restraints import intermolecular_block
         top.append_section(intermolecular_block(b))
-        bj = to_json(b, run.temperature, outdir / "boresch.json")
+        bj = to_json(b, T, outdir / "boresch.json")
         bj["atoms_0based_md_tpr"] = list(b_md.atoms)
         bj["note"] = ("atoms_0based/atoms_1based follow complex/start.gro and topol_fe.top; "
                       "atoms_0based_md_tpr follow md_<r>.tpr")
@@ -302,12 +348,13 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         for s in range(sched.n_states):
             w = leg_dir / f"rep{r}" / f"lam_{s:02d}"
             sd = seed_for(r, s)
-            write_window_mdps(w, run.md_mdp, sched, lig, s, prod_ns, sd)
+            write_window_mdps(w, base, sched, lig, s, prod_ns, sd)
             seeds[f"rep{r}/lam_{s:02d}"] = sd
     meta["ligand_charge"][leg] = q
     meta["alch_ions"][leg] = ions
     meta["n_states"][leg] = sched.n_states
-    meta["temperature"][leg] = run.temperature
+    meta["temperature"][leg] = T
+    meta["md_temperature"][leg] = run.temperature
     meta["prod_ns"][leg] = prod_ns
     meta["seeds"][leg] = seeds
     meta["schedule"][leg] = {"restraint": sched.restraint, "coul": sched.coul,
@@ -318,7 +365,8 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
                             "natoms": natoms, "tc_grps": tc}
     meta["_signature"][leg] = _ligand_signature(top, lig)
     log(f"{leg}: {sched.n_states} states x {args.repeats} repeat(s), {prod_ns:g} ns prod, "
-        f"T = {run.temperature:g} K")
+        f"T = {T:g} K" + (f" (--temperature; md.mdp {run.temperature:g} K)"
+                          if args.temperature is not None else ""))
 
 
 def top_name_at(top: Topology, index0: int) -> str:
@@ -369,6 +417,14 @@ def run_setup(args, argv=None) -> Path:
     for s in scheds.values():
         validate(s)
     runs = {leg: load_rundir(getattr(args, leg), args.replica) for leg in legs}
+    temps = {leg: runs[leg].temperature for leg in legs}
+    if args.temperature is not None:
+        if args.temperature <= 0:
+            raise SetupError("--temperature must be > 0 K")
+    elif max(temps.values()) - min(temps.values()) > 0.5:
+        raise SetupError("md.mdp temperatures differ between legs ("
+                         + ", ".join(f"{l} {t:g} K" for l, t in temps.items())
+                         + "): give --temperature T to run both legs at T")
     _gmx()
 
     outdir.parent.mkdir(parents=True, exist_ok=True)
@@ -382,8 +438,10 @@ def run_setup(args, argv=None) -> Path:
         "outdir": str(outdir), "ligand": args.ligand, "legs": legs,
         "schedule_file": str(sched_path),
         "ligand_charge": {}, "alch_ions": {}, "n_states": {}, "temperature": {},
+        "md_temperature": {}, "temperature_override": args.temperature,
         "prod_ns": {}, "seeds": {}, "schedule": {}, "sources": {}, "_signature": {},
-        "seed_rule": "gen-seed = ld-seed = 1000*repeat + state + 1",
+        "seed_rule": "seed = 1000*repeat + state + 1, same rule in both legs "
+                     "(gen-seed = ld-seed = seed)",
     }
     try:
         for leg in legs:
@@ -396,18 +454,7 @@ def run_setup(args, argv=None) -> Path:
         meta["ligand_charge"] = qs.pop()
         sig = meta.pop("_signature")
         if len(legs) == 2:
-            (na, qa), (nb, qb) = sig["complex"], sig["solvent"]
-            if na != nb:
-                raise SetupError(f"ligand {args.ligand} atoms differ between --complex and "
-                                 "--solvent: not the same ligand")
-            dq = max(abs(x - y) for x, y in zip(qa, qb))
-            if dq > 0.01:
-                warnings.append(f"ligand partial charges differ between legs (max |dq| = "
-                                f"{dq:.3f} e)")
-            tc, ts = meta["temperature"]["complex"], meta["temperature"]["solvent"]
-            if abs(tc - ts) > 1e-6:
-                warnings.append(f"temperature differs between legs: complex {tc:g} K, "
-                                f"solvent {ts:g} K")
+            compare_ligands(args.ligand, sig["complex"], sig["solvent"])
         sbatches = []
         for leg in legs:
             for r in range(args.repeats):

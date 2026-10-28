@@ -63,3 +63,19 @@ def gmx():
     if exe is None:
         pytest.skip("gmx not on PATH (module load gromacs/2026.1-tmpi)")
     return exe
+
+
+def ro_traj(rd, dest, r=0):
+    """Symlink md_<r>.tpr/xtc of a fixture run folder into ``dest`` and return them.
+
+    MDAnalysis writes .<xtc>_offsets.npz/.lock next to the trajectory it opens;
+    opening the symlinks keeps the fixture folders unmodified."""
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    out = []
+    for ext in ("tpr", "xtc"):
+        link = dest / f"md_{r}.{ext}"
+        if not link.exists():
+            link.symlink_to((Path(rd) / f"md_{r}.{ext}").resolve())
+        out.append(link)
+    return tuple(out)

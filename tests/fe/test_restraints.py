@@ -6,6 +6,8 @@ import subprocess
 import numpy as np
 import pytest
 
+from conftest import ro_traj
+
 from automd.fe.abfe.restraints import (Boresch, boresch_correction, check_collinear,
                                        find_boresch, intermolecular_block, to_json)
 
@@ -119,21 +121,23 @@ def test_to_json(tmp_path):
 
 
 @pytest.fixture(scope="module")
-def prolig_boresch():
+def prolig_boresch(tmp_path_factory):
     from pathlib import Path
     import os
     base = os.environ.get("MDUTILS_FE_TESTDATA")
     rd = Path(base) / "t1_run" if base else Path("/cta/users/akocak/maint/phase2_test/t1_run")
     if not rd.is_dir():
         pytest.skip(f"fixture folder missing: {rd}")
-    return rd, find_boresch(rd / "md_0.tpr", rd / "md_0.xtc", "JZ4", 310.0)
+    from conftest import ro_traj
+    tpr, xtc = ro_traj(rd, tmp_path_factory.mktemp("traj"))
+    return rd, find_boresch(tpr, xtc, "JZ4", 310.0)
 
 
-def test_find_on_prolig(prolig_boresch):
+def test_find_on_prolig(prolig_boresch, tmp_path):
     import MDAnalysis as mda
     from MDAnalysis.lib.distances import calc_angles, calc_bonds, calc_dihedrals
     rd, b = prolig_boresch
-    u = mda.Universe(str(rd / "md_0.tpr"), str(rd / "md_0.xtc"))
+    u = mda.Universe(*map(str, ro_traj(rd, tmp_path / "traj")))
     ag = u.atoms[list(b.atoms)]
     assert all(a.name in ("N", "CA", "C") and a.residue.resname != "JZ4" for a in ag[:3])
     assert all(a.resname == "JZ4" and not a.name.startswith("H") for a in ag[3:])
@@ -224,7 +228,7 @@ def test_restraint_follows_restraint_schedule(prolig_boresch, tmp_path, gmx):
     legends = [l.split('legend "', 1)[1] for l in xvg if l.startswith("@ s") and "legend" in l]
     col = 1 + next(i for i, s in enumerate(legends) if "bonded-lambda" in s)
     rows = [list(map(float, l.split())) for l in xvg if l and l[0] not in "#@"]
-    u = mda.Universe(str(rd / "md_0.tpr"), str(rd / "md_0.xtc"))
+    u = mda.Universe(*map(str, ro_traj(rd, tmp_path / "traj")))
     ag = u.atoms[list(b.atoms)]
     assert len(rows) == u.trajectory.n_frames
     for ts, row in zip(u.trajectory, rows):

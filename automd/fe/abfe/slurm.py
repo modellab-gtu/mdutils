@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-GTU_DEFAULTS = {"cpus": 8, "time": "3-00:00:00"}
+GTU_DEFAULTS = {"cpus": 8, "time": "7-00:00:00"}   # as run_files.sh
 TRUBA_DEFAULTS = {"account": "", "partition": "orfoz", "ntasks": 1, "omp": 16,
                   "gmx_module": "apps/gromacs/2024.1-oneapi2024", "time": "3-00:00:00"}
 GPU_NODES = ("cws01",)
@@ -58,8 +58,8 @@ def _header(leg: str, n_states: int, repeat: int, cluster: str, o: dict):
             "export GMX_MAXBACKUP=-1 CUDA_DEVICE_ORDER=PCI_BUS_ID\n"
             "GMX=gmx")
     mdrun_em = "gmx mdrun -ntmpi 1 -ntomp $SLURM_CPUS_PER_TASK"
-    # perturbed non-bonded pairs run on the CPU, the rest (and PME) on the GPU;
-    # bonded/update stay automatic (sd cannot update on the GPU)
+    # non-bonded and PME on the GPU; bonded and update are left to mdrun's
+    # automatic choice
     mdrun = mdrun_em + (" -nb gpu -pme gpu" if gpu else "")
     return head, load, mdrun_em, mdrun
 

@@ -12,14 +12,15 @@ def test_package_importable():
     assert a.__version__ == "0.1.0"
 
 
-def test_mdrg_runtime(prolig_rundir):
+def test_mdrg_runtime(prolig_rundir, tmp_path):
     """MDRestraintsGenerator 0.2.1 (pinned scipy<1.8 upstream) works with the
     installed scipy: ligand/host atom search + Boresch restraint on JZ4."""
     import MDAnalysis as mda
     from MDRestraintsGenerator.search import find_ligand_atoms, find_host_atoms
     from MDRestraintsGenerator.restraints import FindBoreschRestraint
 
-    u = mda.Universe(str(prolig_rundir / "md_0.tpr"), str(prolig_rundir / "md_0.xtc"))
+    from conftest import ro_traj
+    u = mda.Universe(*map(str, ro_traj(prolig_rundir, tmp_path)))
     u.trajectory[0]
     l_sel = "resname JZ4 and not name H*"
     l_atoms = find_ligand_atoms(u, l_selection=l_sel, p_align="protein and name CA")

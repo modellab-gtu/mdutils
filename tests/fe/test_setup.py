@@ -42,6 +42,11 @@ def _grompp_all(gmx, leg_dir, stages=("em", "nvt", "npt", "prod")):
     return n
 
 
+def _listing(d):
+    """Every entry (dotfiles included) of a run folder, for no-write checks."""
+    return sorted(os.listdir(d))
+
+
 def _ndx_groups(path):
     groups, cur = {}, None
     for line in Path(path).read_text().splitlines():
@@ -62,9 +67,11 @@ def solvent_only(tmp_path_factory):
     if shutil.which("gmx") is None:
         pytest.skip("gmx not on PATH")
     lig = _rundir("t4_ace_spce_run")
+    before = _listing(lig)
     out = tmp_path_factory.mktemp("solv") / "ABFE"
     assert _setup(["--solvent", lig, "--ligand", "ACE", "--schedule", "test_short",
                    "--repeats", "2", "--outdir", out]) == 0
+    assert _listing(lig) == before, "setup wrote into the run folder"
     return lig, out
 
 
@@ -78,6 +85,8 @@ def test_setup_solvent_only(solvent_only, gmx):
     assert len(meta["alch_ions"]["solvent"]) == 1
     assert meta["n_states"] == {"solvent": 3}
     assert meta["temperature"]["solvent"] == pytest.approx(300.0)
+    assert meta["temperature_override"] is None
+    assert "same rule in both legs" in meta["seed_rule"]
     assert not (out / "complex").exists()
     assert not (out / "boresch.json").exists()
     for f in ("topol_fe.top", "start.gro", "posre_ref.gro", "index.ndx"):
@@ -103,16 +112,22 @@ def test_setup_solvent_only(solvent_only, gmx):
     assert "--array=0-2" in sb and "gpu" not in sb
     # every window MDP grompps with the FE system
     assert _grompp_all(gmx, solv) == 2 * 3 * 4
-    # nothing written into the run folder
-    assert not any(p.name.startswith(("processed", "topol_fe", "pp_"))
-                   for p in Path(lig).iterdir())
 
 
-def test_setup_full(prolig_rundir, jz4_lig_rundir, tmp_path, gmx):
+def test_setup_full(prolig_rundir, jz4_lig_rundir, tmp_path, gmx, capsys):
+    before = {d: _listing(d) for d in (prolig_rundir, jz4_lig_rundir)}
     out = tmp_path / "ABFE"
-    assert _setup(["--complex", prolig_rundir, "--solvent", jz4_lig_rundir,
-                   "--ligand", "JZ4", "--schedule", "test_short", "--repeats", "2",
-                   "--outdir", out]) == 0
+    args = ["--complex", prolig_rundir, "--solvent", jz4_lig_rundir, "--ligand", "JZ4",
+            "--schedule", "test_short", "--repeats", "2", "--outdir", out]
+    # fixtures: complex md.mdp 310 K, solvent 300 K -> refused without --temperature
+    with pytest.raises(SystemExit) as e:
+        _setup(args)
+    assert e.value.code != 0
+    assert "--temperature" in capsys.readouterr().err
+    assert not out.exists()
+    assert _setup(args + ["--temperature", "300"]) == 0
+    for d, lst in before.items():
+        assert _listing(d) == lst, f"setup wrote into {d}"
     top = (out / "complex" / "topol_fe.top").read_text()
     assert "intermolecular_interactions" in top
     assert "intermolecular_interactions" not in (out / "solvent" / "topol_fe.top").read_text()
@@ -122,7 +137,15 @@ def test_setup_full(prolig_rundir, jz4_lig_rundir, tmp_path, gmx):
     assert meta["n_states"] == {"complex": 4, "solvent": 3}
     assert meta["ligand_charge"] == 0
     assert meta["alch_ions"] == {"complex": [], "solvent": []}
-    assert meta["temperature"]["complex"] == pytest.approx(310.0)
+    assert meta["temperature"] == {"complex": 300.0, "solvent": 300.0}
+    assert meta["md_temperature"] == {"complex": 310.0, "solvent": 300.0}
+    assert meta["temperature_override"] == 300.0
+    assert b["T"] == 300.0
+    for mdp in out.glob("*/rep*/lam_*/*.mdp"):
+        t = mdp.read_text()
+        assert re.search(r"^ref-t\s*=\s*300 300$", t, re.M), mdp
+        if mdp.name == "nvt.mdp":
+            assert re.search(r"^gen-temp\s*=\s*300$", t, re.M), mdp
     assert "git_describe" in meta and "versions" in meta
     assert len(_windows(out / "complex", 1)) == 4
     sub = (out / "submit_abfe.sh").read_text()
@@ -246,7 +269,7 @@ def test_boresch_name_check(tmp_path):
     from automd.fe.abfe.setup import SetupError, check_boresch_names
     gro = tmp_path / "x.gro"
     rows = [(1, "LEU", "N"), (1, "LEU", "CA"), (1, "LEU", "C"),
-            (2, "JZ4", "C1"), (2, "JZ4", "C2"), (2, "JZ4", "C3")]
+            (164, "JZ4", "C1"), (164, "JZ4", "C2"), (164, "JZ4", "C3")]
     gro.write_text("t\n6\n" + "".join(f"{r:5d}{n:<5s}{a:>5s}{i + 1:5d}   0.000   0.000   0.000\n"
                                        for i, (r, n, a) in enumerate(rows)) + "   3.0 3.0 3.0\n")
     names = ("LEU1:C", "LEU1:CA", "LEU1:N", "JZ4164:C1", "JZ4164:C2", "JZ4164:C3")
@@ -257,3 +280,41 @@ def test_boresch_name_check(tmp_path):
                  phiA0=0, phiB0=0, phiC0=0)
     with pytest.raises(SetupError, match="boresch.json says LEU1:C"):
         check_boresch_names(b2, gro)
+    # same names, other residue number -> refused
+    b3 = Boresch(atoms=(2, 1, 0, 3, 4, 5), names=names[:3] + ("JZ4165:C1",) + names[4:],
+                 r0=0.5, thetaA0=90, thetaB0=90, phiA0=0, phiB0=0, phiC0=0)
+    with pytest.raises(SetupError, match="JZ4165:C1"):
+        check_boresch_names(b3, gro)
+
+
+def test_ligand_mismatch(prolig_rundir, jz4_lig_rundir, tmp_path, capsys):
+    """A solvent ligand with other partial charges is refused (no override)."""
+    import shutil
+    solv = tmp_path / "jz4_solv_copy"
+    shutil.copytree(jz4_lig_rundir, solv, symlinks=True)
+    itp = solv / "JZ4_GMX.itp"
+    txt = itp.read_text()
+    # move 0.01 e from C1 to C2: integer total charge kept, atoms differ
+    txt = txt.replace("JZ4     C1      1 -0.09510000", "JZ4     C1      1 -0.08510000", 1)
+    txt = txt.replace("JZ4     C2      2 -0.16500000", "JZ4     C2      2 -0.17500000", 1)
+    assert txt != itp.read_text()
+    itp.write_text(txt)
+    out = tmp_path / "ABFE"
+    with pytest.raises(SystemExit) as e:
+        _setup(["--complex", prolig_rundir, "--solvent", solv, "--ligand", "JZ4",
+                "--schedule", "test_short", "--repeats", "1", "--temperature", "300",
+                "--outdir", out])
+    assert e.value.code != 0
+    err = capsys.readouterr().err
+    assert "#1 C1" in err and "#2 C2" in err and "charge" in err
+    assert not out.exists()
+
+
+def test_fixture_folders_untouched():
+    """Runs last in this module: no fixture run folder has MDAnalysis offsets
+    files or other leftovers from the FE tests."""
+    from conftest import _DEFAULTS
+    for d in _DEFAULTS.values():
+        if os.path.isdir(d):
+            stray = [f for f in os.listdir(d) if "_offsets" in f]
+            assert not stray, f"{d}: {stray}"
