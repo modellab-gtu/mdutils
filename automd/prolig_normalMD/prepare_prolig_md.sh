@@ -760,7 +760,10 @@ prepare_ligand() {
     esac
 
     log "Running parmchk2"
-    parmchk2 -i "$AC_MOL2" -f mol2 -o "$AC_FRCMOD"
+    # -s 2 = GAFF2 (atoms are typed gaff2). parmchk2 defaults to GAFF1, which would put GAFF1 values for
+    # GAFF2-only types (e.g. nx/ny/nz protonated amines) into the frcmod, overriding gaff2.dat. Use the number:
+    # AmberTools 25 parmchk2 parses "-s gaff2" unreliably (falls back to GAFF1 in ~1 of 4 runs).
+    parmchk2 -i "$AC_MOL2" -f mol2 -o "$AC_FRCMOD" -s 2
     [[ -s "$AC_FRCMOD" ]] || die "parmchk2 did not create $AC_FRCMOD"
 
     if [[ "$USE_PARMED" -eq 1 ]]; then
