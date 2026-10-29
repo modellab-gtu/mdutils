@@ -340,3 +340,104 @@ def test_fixture_folders_untouched():
         if os.path.isdir(d):
             stray = [f for f in os.listdir(d) if "_offsets" in f]
             assert not stray, f"{d}: {stray}"
+
+
+def _gro_names(gro):
+    lines = Path(gro).read_text().splitlines()
+    n = int(lines[1])
+    return [(l[5:10].strip(), l[10:15].strip()) for l in lines[2:2 + n]]
+
+
+def _wall_lines(top_text):
+    return [l.split() for l in top_text.splitlines()
+            if len(l.split()) == 11 and l.split()[2] == "10"]
+
+
+def _check_wall(out, leg, lig_res, ion_name):
+    meta = json.loads((out / "setup.json").read_text())
+    assert len(meta["alch_ions"][leg]) == 1
+    names = _gro_names(out / leg / "start.gro")
+    w = meta["alch_wall"][leg]
+    assert 0 < w["d_wall"] <= 1.0 and w["excluded_fraction"] > 0
+    b = w["bonds"][0]
+    assert b["ion_atom_1based"] == len(names) and names[-1][0] == ion_name
+    a = b["ligand_anchor_1based"]
+    assert names[a - 1][0] == lig_res and names[a - 1][1] == b["ligand_anchor_name"]
+    assert not b["ligand_anchor_name"].upper().startswith("H")
+    top = (out / leg / "topol_fe.top").read_text()
+    wl = _wall_lines(top)
+    assert len(wl) == 1
+    assert [int(wl[0][0]), int(wl[0][1])] == [a, len(names)]
+    assert [float(x) for x in wl[0][3:]] == 2 * [pytest.approx(w["d_wall"], abs=1e-4), 50.0, 51.0, 1000.0]
+    assert top.count("[ intermolecular_interactions ]") == 1
+    g = _ndx_groups(out / leg / "index.ndx")
+    assert "ABFE_LIG" not in g and "ABFE_ION1" not in g
+    for f in (out / leg / "rep0").glob("lam_*/*.mdp"):
+        assert "pull" not in f.read_text()
+    return meta
+
+
+def test_wall_acetate_meta_warning(solvent_only, gmx):
+    lig, out = solvent_only
+    meta = _check_wall(out, "solvent", "ACE", "NA")
+    w = meta["alch_wall"]["solvent"]
+    assert w["excluded_fraction"] > 0.10
+    assert any("excludes" in x and "finite-size" in x for x in meta["warnings"])
+    assert _grompp_all(gmx, out / "solvent") == 2 * 3 * 4
+
+
+def test_wall_lid_cl(charged_lig_rundir, tmp_path, gmx):
+    out = tmp_path / "ABFE"
+    assert _setup(["--solvent", charged_lig_rundir, "--ligand", "LID",
+                   "--schedule", "test_short", "--repeats", "1", "--outdir", out]) == 0
+    _check_wall(out, "solvent", "LID", "CL")
+
+
+def test_neutral_leg_has_no_wall(jz4_lig_rundir, tmp_path, gmx):
+    out = tmp_path / "ABFE"
+    assert _setup(["--solvent", jz4_lig_rundir, "--ligand", "JZ4", "--schedule",
+                   "test_short", "--repeats", "1", "--outdir", out]) == 0
+    meta = json.loads((out / "setup.json").read_text())
+    assert not meta["alch_ions"]["solvent"] and not meta["alch_wall"]["solvent"]
+    assert "intermolecular" not in (out / "solvent" / "topol_fe.top").read_text()
+    for f in (out / "solvent" / "rep0").glob("lam_*/*.mdp"):
+        assert "pull" not in f.read_text()
+
+
+def test_wall_acetate_grompp_prod_states(lig_rundir, tmp_path, gmx):
+    """Default 31-state schedule, prod MDP of states 0, 5, 30, -maxwarn 0."""
+    out = tmp_path / "ABFE"
+    assert _setup(["--solvent", lig_rundir, "--ligand", "ACE", "--repeats", "1",
+                   "--outdir", out]) == 0
+    leg = out / "solvent"
+    for s in (0, 5, 30):
+        w = leg / "rep0" / f"lam_{s:02d}"
+        r = subprocess.run(
+            [gmx, "grompp", "-f", "prod.mdp", "-c", "../../start.gro",
+             "-r", "../../posre_ref.gro", "-p", "../../topol_fe.top",
+             "-n", "../../index.ndx", "-o", "_chk.tpr", "-po", "_chk.mdp",
+             "-maxwarn", "0"], cwd=w, capture_output=True, text=True,
+            env={**os.environ, "GMX_MAXBACKUP": "-1"})
+        assert r.returncode == 0, r.stderr[-3000:]
+
+
+def test_wall_violation_raises(lig_rundir):
+    """Anchor-ion distance below d_wall at the start -> error."""
+    import MDAnalysis as mda
+    from automd.fe.abfe.ions import anchor_atom, check_wall_start
+    u = mda.Universe(str(lig_rundir / "md_0.gro"))
+    lig = [a.index for a in u.atoms if a.resname == "ACE"]
+    ion = [a.index for a in u.atoms if a.resname == "NA"][0]
+    anc = anchor_atom(u, lig)
+    assert anc in lig and not u.atoms[anc].name.upper().startswith("H")
+    d = check_wall_start(u, anc, [ion], 0.1)[0]
+    assert d > 0.1
+    with pytest.raises(ValueError, match="closer than the wall"):
+        check_wall_start(u, anc, [ion], d + 0.5)
+
+
+def test_wall_box_limit():
+    from automd.fe.abfe.ions import check_wall_box
+    check_wall_box(0.976, [33.2, 31.3, 27.1, 90, 90, 90])
+    with pytest.raises(ValueError, match="0.49"):
+        check_wall_box(1.5, [30.0, 30.0, 30.0, 90, 90, 90])

@@ -75,6 +75,69 @@ def default_d_min(box) -> float:
     return min(MAX_D_MIN, BOX_FRACTION * float(np.min(box[:3])) / 10.0)
 
 
+WALL_FRACTION = 0.8
+WALL_MAX = 1.0     # nm
+WALL_K = 1000.0    # kJ mol-1 nm-2, no B state -> lambda-independent
+WALL_UP1, WALL_UP2 = 50.0, 51.0   # nm, funct-10 upper limits (never reached)
+WALL_BOX_LIMIT = 0.49   # GROMACS: pull distance < 0.49 x shortest box vector
+
+
+def wall_distance(box) -> float:
+    """Ligand-anchor / co-alchemical-ion wall: round(min(1.0, 0.8 x d_min), 3) nm."""
+    return round(min(WALL_MAX, WALL_FRACTION * default_d_min(box)), 3)
+
+
+def check_wall_box(d_wall: float, box) -> None:
+    edge = float(np.min(box[:3])) / 10.0
+    if d_wall >= WALL_BOX_LIMIT * edge:
+        raise ValueError(f"ion wall distance {d_wall:.3f} nm is not below 0.49 x the "
+                         f"shortest box edge ({edge:.3f} nm): GROMACS cannot pull "
+                         "across the box; re-prepare with a larger box")
+
+
+def excluded_fraction(d_wall: float, box) -> float:
+    """Fraction of the box inside the wall sphere: (4/3) pi d^3 / V (box in A)."""
+    a, b, c, al, be, ga = (float(x) for x in box[:6])
+    ca, cb, cg = (np.cos(np.radians(x)) for x in (al, be, ga))
+    vol = a * b * c * np.sqrt(max(1 - ca**2 - cb**2 - cg**2 + 2 * ca * cb * cg, 0.0)) / 1000.0
+    return float(4.0 / 3.0 * np.pi * d_wall**3 / vol)
+
+
+def anchor_atom(u: mda.Universe, lig_idx) -> int:
+    """0-based index of the ligand heavy atom nearest the ligand centre of mass."""
+    pos = u.atoms.positions.astype(float)
+    lig_idx = list(lig_idx)
+    m = u.atoms.masses[lig_idx].astype(float)
+    if not np.all(m > 0):
+        m = np.ones(len(lig_idx))
+    rel = minimize_vectors(pos[lig_idx] - pos[lig_idx[0]], u.dimensions)
+    com = pos[lig_idx[0]] + (m[:, None] * rel).sum(axis=0) / m.sum()
+    d = np.linalg.norm(rel + pos[lig_idx[0]] - com, axis=1)
+    heavy = [j for j, k in enumerate(lig_idx)
+             if not u.atoms[k].name.upper().startswith("H")
+             and not (u.atoms.masses[k] and u.atoms.masses[k] < 1.5)]
+    if not heavy:
+        raise ValueError("ligand has no heavy atom")
+    j = min(heavy, key=lambda j: d[j])
+    return int(lig_idx[j])
+
+
+def check_wall_start(u: mda.Universe, anchor: int, ion_idx, d_wall: float) -> list[float]:
+    """Anchor-ion distances (nm, minimum image) in ``u``; ValueError if any is
+    below ``d_wall`` (the restraint would start in its harmonic region)."""
+    pos = u.atoms.positions.astype(float)
+    out = []
+    for k in ion_idx:
+        v = minimize_vectors(pos[[k]] - pos[[anchor]], u.dimensions)[0]
+        out.append(float(np.linalg.norm(v)) / 10.0)
+    bad = [(k, d) for k, d in zip(ion_idx, out) if d < d_wall]
+    if bad:
+        raise ValueError("co-alchemical ion(s) closer than the wall to the ligand anchor: "
+                         + ", ".join(f"atom {k} at {d:.3f} nm < {d_wall:.3f} nm"
+                                     for k, d in bad))
+    return out
+
+
 def choose_ions(u: mda.Universe, top: Topology, ligand: str, q_lig: int,
                 min_lig_dist: float | None = None) -> list[int]:
     """0-based indices of |q_lig| monovalent ions of sign opposite to q_lig.

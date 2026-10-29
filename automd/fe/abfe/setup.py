@@ -311,6 +311,10 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
     if not posre.is_file():
         raise SetupError(f"{posre} was not written")
 
+    wall, wall_bonds = {}, []
+    if ions:
+        wall, wall_bonds = _wall_setup(leg, top, start, lig, lig_res, ions, warnings)
+
     if leg == "complex":
         from .restraints import check_collinear, find_boresch, to_json
         log("complex: searching Boresch anchors (MDRestraintsGenerator) on "
@@ -331,7 +335,7 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         b = replace(b_md, atoms=tuple(a - sum(m < a for m in moved) for a in b_md.atoms))
         check_boresch_names(b, start)
         from .restraints import intermolecular_block
-        top.append_section(intermolecular_block(b))
+        top.append_section(intermolecular_block(b, wall_bonds))
         bj = to_json(b, T, outdir / "boresch.json")
         bj["atoms_0based_md_tpr"] = list(b_md.atoms)
         bj["note"] = ("atoms_0based/atoms_1based follow complex/start.gro and topol_fe.top; "
@@ -343,6 +347,9 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
         log(f"complex: Boresch {', '.join(b.names)}; dG_restr,off = "
             f"{bj['dG_restr_off_kcal']:.3f} kcal/mol")
 
+    if wall_bonds and leg != "complex":
+        from .restraints import wall_block
+        top.append_section(wall_block(wall_bonds))
     top.write(leg_dir / "topol_fe.top")
 
     tc = run.md_mdp.get("tc-grps", "").split()
@@ -366,6 +373,7 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
             seeds[f"rep{r}/lam_{s:02d}"] = sd
     meta["ligand_charge"][leg] = q
     meta["alch_ions"][leg] = ions
+    meta["alch_wall"][leg] = wall
     meta["n_states"][leg] = sched.n_states
     meta["temperature"][leg] = T
     meta["md_temperature"][leg] = run.temperature
@@ -381,6 +389,63 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
     log(f"{leg}: {sched.n_states} states x {args.repeats} repeat(s), {prod_ns:g} ns prod, "
         f"T = {T:g} K" + (f" (--temperature; md.mdp {run.temperature:g} K)"
                           if args.temperature is not None else ""))
+
+
+def _wall_setup(leg, top, start, lig, lig_res, ions, warnings):
+    """(wall meta, funct-10 bond tuples) for the ligand-anchor / ion distance wall."""
+    import MDAnalysis as mda
+    from . import ions as I
+
+    u = mda.Universe(str(start))
+    d_wall = I.wall_distance(u.dimensions)
+    try:
+        I.check_wall_box(d_wall, u.dimensions)
+    except ValueError as e:
+        raise SetupError(f"{leg}: {e}") from e
+    names = _gro_atoms(start)
+    lig_idx, i = [], 0
+    for name, cnt in top.molecules:
+        n = len(top.require_moleculetype(name).atoms)
+        for _ in range(cnt):
+            if name == lig:
+                lig_idx = list(range(i, i + n))
+            i += n
+    if not lig_idx or any(names[k][1] != lig_res for k in lig_idx):
+        raise SetupError(f"{leg}: ligand atoms of {start.name} do not all carry residue "
+                         f"name {lig_res}")
+    if sum(1 for r in names if r[1] == lig_res) != len(lig_idx):
+        raise SetupError(f"{leg}: residue {lig_res} occurs outside the ligand molecule "
+                         f"in {start.name}")
+    ion_idx = [i["start_index0"] for i in ions]
+    for ion, k in zip(ions, ion_idx):
+        if names[k][1] != ion["resname"] or names[k][2] != ion["name"]:
+            raise SetupError(f"{leg}: start.gro atom {k + 1} is {names[k][1]}:{names[k][2]}"
+                             f", expected ion {ion['resname']}:{ion['name']}")
+    anchor = I.anchor_atom(u, lig_idx)
+    try:
+        dists = I.check_wall_start(u, anchor, ion_idx, d_wall)
+    except ValueError as e:
+        raise SetupError(f"{leg}: {e}") from e
+    f = I.excluded_fraction(d_wall, u.dimensions)
+    bonds, coords = [], []
+    for j, k in enumerate(ion_idx, 1):
+        bonds.append((anchor + 1, k + 1, d_wall, I.WALL_UP1, I.WALL_UP2, I.WALL_K))
+        coords.append({"bond": j, "ligand_anchor_1based": anchor + 1,
+                       "ligand_anchor_name": names[anchor][2],
+                       "ion_atom_1based": k + 1, "ion_name": names[k][2]})
+    wall = {"d_wall": d_wall, "k": I.WALL_K, "up1": I.WALL_UP1, "up2": I.WALL_UP2,
+            "funct": 10, "excluded_fraction": round(f, 4),
+            "start_anchor_ion_distances_nm": [round(d, 3) for d in dists], "bonds": coords}
+    for ion in ions:
+        ion["wall_d_nm"] = d_wall
+    log(f"{leg}: ion wall d_wall = {d_wall:.3f} nm (funct-10, k = {I.WALL_K:g}) from anchor "
+        f"{names[anchor][2]} (#{anchor + 1}), excludes {100 * f:.1f} % of the box; start "
+        "anchor-ion distance(s) " + ", ".join(f"{d:.2f}" for d in dists) + " nm")
+    if f > 0.10:
+        warnings.append(f"{leg}: co-alchemical ion wall excludes {100 * f:.1f} % of the "
+                        "box; finite-size effects likely — re-prepare the ligand box with "
+                        "more padding")
+    return wall, bonds
 
 
 def top_name_at(top: Topology, index0: int) -> str:
@@ -452,7 +517,7 @@ def run_setup(args, argv=None) -> Path:
         "options": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()},
         "outdir": str(outdir), "ligand": args.ligand, "legs": legs,
         "schedule_file": str(sched_path),
-        "ligand_charge": {}, "alch_ions": {}, "n_states": {}, "temperature": {},
+        "ligand_charge": {}, "alch_ions": {}, "alch_wall": {}, "n_states": {}, "temperature": {},
         "md_temperature": {}, "temperature_override": args.temperature,
         "prod_ns": {}, "seeds": {}, "schedule": {}, "sources": {}, "_signature": {},
         "seed_rule": "seed = 1000*repeat + state + 1, same rule in both legs "

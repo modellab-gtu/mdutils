@@ -238,3 +238,15 @@ def test_restraint_follows_restraint_schedule(prolig_boresch, tmp_path, gmx):
             assert row[col] < 1e-2
         else:
             assert row[col] > 1.0
+
+
+def test_block_with_wall_single_section():
+    b = _ref(atoms=(10, 11, 12, 2000, 2001, 2002))
+    txt = intermolecular_block(b, [(2000, 5000, 0.976, 50.0, 51.0, 1000.0)])
+    assert txt.count("[ intermolecular_interactions ]") == 1
+    assert txt.count("[ bonds ]") == 1
+    rows = [l.split() for l in txt.splitlines() if len(l.split()) == 11 and l.split()[2] == "10"]
+    assert rows == [["2000", "5000", "10"] + ["0.9760", "50.000", "51.000", "1000.000"] * 2]
+    from automd.fe.abfe.restraints import wall_block
+    w = wall_block([(1, 2, 1.0, 50.0, 51.0, 1000.0), (1, 3, 1.0, 50.0, 51.0, 1000.0)])
+    assert w.count("[ intermolecular_interactions ]") == 1 and w.count(" 10 ") == 2

@@ -351,3 +351,9 @@ def test_parmed_repeated_block_split(parmed_prolig_rundir, tmp_path, gmx):
     assert n_at(t2) == len(u.atoms) == len(mda.Universe(str(tmp_path / "o.gro")).atoms)
     g = mda.Universe(str(tmp_path / "o.gro"))
     assert np.allclose(g.atoms[-1].position, u.atoms[idx[0]].position, atol=0.1)
+
+
+def test_wall_distance():
+    from automd.fe.abfe.ions import wall_distance
+    assert wall_distance([33.2, 31.3, 27.1, 90, 90, 90]) == 0.976
+    assert wall_distance([60.0, 60.0, 60.0, 90, 90, 90]) == 1.0

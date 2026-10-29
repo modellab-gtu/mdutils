@@ -85,3 +85,11 @@ def test_barostat_always_c_rescale():
             "tc-grps": "LIG Water_and_ions", "tau-t": "1 1"}
     m = fe_mdps(base, default_schedule("solvent"), "LIG", 0, 1.0, 1)
     assert m["npt"]["pcoupl"] == "C-rescale" and m["prod"]["pcoupl"] == "C-rescale"
+
+
+def test_no_pull_keys_any_leg():
+    from automd.fe.abfe.mdp import fe_mdps
+    from automd.fe.abfe.schedule import default_schedule
+    base = {"ref-t": "300 300", "tc-grps": "LIG Water_and_ions", "tau-t": "1 1"}
+    m = fe_mdps(base, default_schedule("solvent"), "LIG", 3, 1.0, 1)
+    assert not any(k.startswith("pull") for d in m.values() for k in d)

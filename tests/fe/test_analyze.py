@@ -266,3 +266,11 @@ def test_min_overlap_uses_smaller_of_pair(monkeypatch):
     monkeypatch.setattr("alchemlyb.estimators.MBAR", Fake)
     res = an.analyze_files(load_benzene()["data"]["Coulomb"], 300.0, equil_ns=0.0)
     assert res.min_overlap == pytest.approx(0.001)
+
+
+def test_ion_wall_note(tmp_path):
+    from automd.fe.abfe.analyze import wall_note
+    assert wall_note({"alch_ions": {"solvent": []}}) is None
+    n = wall_note({"alch_ions": {"solvent": [{"name": "NA"}], "complex": []}})
+    assert n == ("co-alchemical ion(s) kept >= d_wall nm from ligand COM by a "
+                 "lambda-independent wall (no correction applied)")

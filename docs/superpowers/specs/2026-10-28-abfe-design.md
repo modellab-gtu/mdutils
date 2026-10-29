@@ -122,6 +122,14 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
   - The protein boxes have only about 1.2 nm of padding, so a protein-distance cutoff is not used.
   - Opposite-sign ions always exist: the neutralising ions in the ligand box, and the 0.15 M salt in the complex box. If there are too few anyway, setup stops with an error telling the user to re-prepare with salt.
 - **Topology:** the chosen ions are moved to the end of the molecule list as a new moleculetype `<ION>_ALCH`. The B-state has charge 0 and unchanged LJ, so its charge follows `coul-lambdas`. Each ion has a flat-bottom position restraint (sphere of radius 0.5 nm around its start position, k = 1000 kJ mol⁻¹ nm⁻²), so it cannot drift into the site.
+- **Ligand–ion wall (validation finding):** without it the free ligand forms a contact ion pair with its co-alchemical ion in the solvent leg (min distance 0.23 nm, Coulomb-ramp overlap ~0). Each ion gets a λ-independent one-sided distance wall to the ligand.
+  - It is a `[ intermolecular_interactions ]` `[ bonds ]` entry of function type 10 (restraint potential) between the ligand heavy atom nearest the ligand centre of mass in `start.gro` (the anchor, recorded with its name in `setup.json` under `alch_wall`) and the ion: low = d_wall, up1 = 50 nm, up2 = 51 nm, kdr = 1000 kJ mol⁻¹ nm⁻². The B state equals the A state, so it is λ-independent under `bonded-lambdas`.
+  - d_wall = round(min(1.0, 0.8 × d_min), 3) nm. It is zero above d_wall and harmonic below, and must stay below 0.49 × shortest box edge (checked).
+  - In the complex leg the wall bonds share the single `[ intermolecular_interactions ]` section with the Boresch terms.
+  - The pull code is not used: it aborts when the group distance exceeds 0.49 × the box edge, which free ions do.
+  - Intermolecular bonded interactions need single-rank mdrun (`-ntmpi 1`, no domain decomposition), as in the current protocol.
+  - If the wall excludes more than 10 % of the box, (4/3)π d_wall³ / V, setup warns of finite-size effects. The start structure must already satisfy the wall, otherwise setup stops.
+  - No free-energy correction is applied: the wall enforces the non-interacting ligand/ion reference state that the co-alchemical method assumes. `abfe_analyze` prints a note line.
 - **Checks:** setup asserts that the total charge is 0 in state A and in state B. It also asserts that the ions and the ligand are both at full charge when Coulomb λ = 0 and both at zero charge when Coulomb λ = 1.
 
 ## Analysis (`abfe_analyze.sh`)

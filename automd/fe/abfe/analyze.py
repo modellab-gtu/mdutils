@@ -357,6 +357,15 @@ def _f(v: float, e: float | None = None, scale: float = 1.0) -> str:
     return s
 
 
+WALL_NOTE = ("co-alchemical ion(s) kept >= d_wall nm from ligand COM by a "
+             "lambda-independent wall (no correction applied)")
+
+
+def wall_note(setup: dict) -> str | None:
+    ions = setup.get("alch_ions") or {}
+    return WALL_NOTE if any(ions.values()) else None
+
+
 def write_results(outdir: Path, setup: dict, legs: dict, comb: dict, warns: list,
                   *, T: float, equil_ns: float, boresch: dict | None, abfe: Path,
                   args_line: str) -> None:
@@ -373,6 +382,9 @@ def write_results(outdir: Path, setup: dict, legs: dict, comb: dict, warns: list
     L.append("legs: " + ", ".join(f"{l} ({setup['n_states'][l]} states)"
                                   for l in setup["legs"])
              + f"; repeats analysed: {sorted({r for _, r in legs})}")
+    wn = wall_note(setup)
+    if wn:
+        L.append("note: " + wn)
     L.append("")
     L.append("Sign convention")
     L.append("  dG_<leg>,decouple = G(last lambda state, ligand decoupled) - G(state 0, coupled)")

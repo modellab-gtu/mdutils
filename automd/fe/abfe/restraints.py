@@ -97,16 +97,37 @@ def check_collinear(b: Boresch, min_deg: float = 10.0) -> None:
                 f"of collinear (0/180); pick other anchors or use --force-restraint")
 
 
-def intermolecular_block(b: Boresch) -> str:
-    """``[ intermolecular_interactions ]`` text (append after [ molecules ])."""
+def wall_bond_lines(wall_bonds) -> list[str]:
+    """funct-10 (restraint potential) lines: low=d_wall, up1, up2, kdr; no B state."""
+    # B-state written equal to A: grompp -maxwarn 0 rejects the implicit copy for
+    # perturbed atoms; A == B keeps the wall lambda-independent
+    return [f"{a:>7d}{b:>7d}    10 {d:10.4f} {u1:10.3f} {u2:10.3f} {k:10.3f}"
+            f" {d:10.4f} {u1:10.3f} {u2:10.3f} {k:10.3f}"
+            for a, b, d, u1, u2, k in wall_bonds]
+
+
+def wall_block(wall_bonds) -> str:
+    """Standalone ``[ intermolecular_interactions ]`` with only the ion wall bonds."""
+    return "\n".join(["; co-alchemical ion wall (automd.fe.abfe), funct 10, lambda-independent",
+                      "[ intermolecular_interactions ]", "[ bonds ]",
+                      ";    ai     aj  type    lowA    up1A    up2A    kdrA    lowB    up1B    up2B    kdrB"]
+                     + wall_bond_lines(wall_bonds)) + "\n"
+
+
+def intermolecular_block(b: Boresch, wall_bonds=()) -> str:
+    """The single ``[ intermolecular_interactions ]`` text (append after [ molecules ]):
+    Boresch terms plus optional ion-wall bonds (a, b, low, up1, up2, kdr; 1-based)."""
     i = [a + 1 for a in b.atoms]  # 1-based global
     P3, P2, P1, L1, L2, L3 = i
     out = ["; Boresch restraint (automd.fe.abfe); A: k=0 (off), B: full k",
            "[ intermolecular_interactions ]",
            "[ bonds ]",
            ";    ai     aj  type       bA       kA       bB         kB",
-           f"{P1:>7d}{L1:>7d}     6 {b.r0:10.5f}      0.0 {b.r0:10.5f} {b.kr:10.3f}",
-           "[ angles ]",
+           f"{P1:>7d}{L1:>7d}     6 {b.r0:10.5f}      0.0 {b.r0:10.5f} {b.kr:10.3f}"]
+    if wall_bonds:
+        out += ["; co-alchemical ion wall, funct 10 (no B state: lambda-independent)",
+                ";    ai     aj  type    lowA    up1A    up2A    kdrA    lowB    up1B    up2B    kdrB"] + wall_bond_lines(wall_bonds)
+    out += ["[ angles ]",
            ";    ai     aj     ak  type     thA      kA     thB         kB"]
     for (a1, a2, a3), th in (((P2, P1, L1), b.thetaA0), ((P1, L1, L2), b.thetaB0)):
         out.append(f"{a1:>7d}{a2:>7d}{a3:>7d}     1 {th:10.4f}      0.0 {th:10.4f} "
