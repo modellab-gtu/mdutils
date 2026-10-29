@@ -270,7 +270,10 @@ def test_min_overlap_uses_smaller_of_pair(monkeypatch):
 
 def test_ion_wall_note(tmp_path):
     from automd.fe.abfe.analyze import wall_note
-    assert wall_note({"alch_ions": {"solvent": []}}) is None
-    n = wall_note({"alch_ions": {"solvent": [{"name": "NA"}], "complex": []}})
-    assert n == ("co-alchemical ion(s) kept >= d_wall nm from ligand COM by a "
-                 "lambda-independent wall (no correction applied)")
+    # old setups: ions but no wall -> no note
+    assert wall_note({"alch_ions": {"solvent": [{"name": "NA"}]}}) is None
+    assert wall_note({"alch_ions": {"solvent": [{"name": "NA"}]}, "alch_wall": {"solvent": {}}}) is None
+    w = {"d_wall": 0.976, "bonds": [{"ligand_anchor_name": "C2", "ligand_anchor_1based": 2}]}
+    n = wall_note({"alch_ions": {"solvent": [{"name": "NA"}]}, "alch_wall": {"solvent": w}})
+    assert "0.976 nm" in n and "C2 (#2)" in n and "no correction applied" in n
+    assert "solvent:" in n

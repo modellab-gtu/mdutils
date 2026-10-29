@@ -98,7 +98,7 @@ def check_collinear(b: Boresch, min_deg: float = 10.0) -> None:
 
 
 def wall_bond_lines(wall_bonds) -> list[str]:
-    """funct-10 (restraint potential) lines: low=d_wall, up1, up2, kdr; no B state."""
+    """funct-10 (restraint potential) lines: low=d_wall, up1, up2, kdr; B written equal to A."""
     # B-state written equal to A: grompp -maxwarn 0 rejects the implicit copy for
     # perturbed atoms; A == B keeps the wall lambda-independent
     return [f"{a:>7d}{b:>7d}    10 {d:10.4f} {u1:10.3f} {u2:10.3f} {k:10.3f}"
@@ -125,7 +125,7 @@ def intermolecular_block(b: Boresch, wall_bonds=()) -> str:
            ";    ai     aj  type       bA       kA       bB         kB",
            f"{P1:>7d}{L1:>7d}     6 {b.r0:10.5f}      0.0 {b.r0:10.5f} {b.kr:10.3f}"]
     if wall_bonds:
-        out += ["; co-alchemical ion wall, funct 10 (no B state: lambda-independent)",
+        out += ["; co-alchemical ion wall, funct 10 (B == A: lambda-independent)",
                 ";    ai     aj  type    lowA    up1A    up2A    kdrA    lowB    up1B    up2B    kdrB"] + wall_bond_lines(wall_bonds)
     out += ["[ angles ]",
            ";    ai     aj     ak  type     thA      kA     thB         kB"]

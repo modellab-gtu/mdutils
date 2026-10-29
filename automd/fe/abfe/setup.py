@@ -314,6 +314,11 @@ def build_leg(leg: str, run: RunDir, leg_dir: Path, outdir: Path, args, sched: S
     wall, wall_bonds = {}, []
     if ions:
         wall, wall_bonds = _wall_setup(leg, top, start, lig, lig_res, ions, warnings)
+        if args.cluster == "truba" and args.truba_ntasks > 1:
+            raise SetupError(f"{leg}: the co-alchemical ion wall (intermolecular bonded "
+                             "restraint) needs single-rank mdrun (no domain decomposition); "
+                             f"--truba-ntasks {args.truba_ntasks} is not allowed for a "
+                             "charged ligand, use --truba-ntasks 1 (OpenMP threads only)")
 
     if leg == "complex":
         from .restraints import check_collinear, find_boresch, to_json
@@ -398,10 +403,6 @@ def _wall_setup(leg, top, start, lig, lig_res, ions, warnings):
 
     u = mda.Universe(str(start))
     d_wall = I.wall_distance(u.dimensions)
-    try:
-        I.check_wall_box(d_wall, u.dimensions)
-    except ValueError as e:
-        raise SetupError(f"{leg}: {e}") from e
     names = _gro_atoms(start)
     lig_idx, i = [], 0
     for name, cnt in top.molecules:

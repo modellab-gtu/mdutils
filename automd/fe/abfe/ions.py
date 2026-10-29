@@ -77,22 +77,13 @@ def default_d_min(box) -> float:
 
 WALL_FRACTION = 0.8
 WALL_MAX = 1.0     # nm
-WALL_K = 1000.0    # kJ mol-1 nm-2, no B state -> lambda-independent
+WALL_K = 1000.0    # kJ mol-1 nm-2, funct-10 B state == A -> lambda-independent
 WALL_UP1, WALL_UP2 = 50.0, 51.0   # nm, funct-10 upper limits (never reached)
-WALL_BOX_LIMIT = 0.49   # GROMACS: pull distance < 0.49 x shortest box vector
 
 
 def wall_distance(box) -> float:
     """Ligand-anchor / co-alchemical-ion wall: round(min(1.0, 0.8 x d_min), 3) nm."""
     return round(min(WALL_MAX, WALL_FRACTION * default_d_min(box)), 3)
-
-
-def check_wall_box(d_wall: float, box) -> None:
-    edge = float(np.min(box[:3])) / 10.0
-    if d_wall >= WALL_BOX_LIMIT * edge:
-        raise ValueError(f"ion wall distance {d_wall:.3f} nm is not below 0.49 x the "
-                         f"shortest box edge ({edge:.3f} nm): GROMACS cannot pull "
-                         "across the box; re-prepare with a larger box")
 
 
 def excluded_fraction(d_wall: float, box) -> float:

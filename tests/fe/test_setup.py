@@ -436,8 +436,10 @@ def test_wall_violation_raises(lig_rundir):
         check_wall_start(u, anc, [ion], d + 0.5)
 
 
-def test_wall_box_limit():
-    from automd.fe.abfe.ions import check_wall_box
-    check_wall_box(0.976, [33.2, 31.3, 27.1, 90, 90, 90])
-    with pytest.raises(ValueError, match="0.49"):
-        check_wall_box(1.5, [30.0, 30.0, 30.0, 90, 90, 90])
+def test_wall_refuses_multirank_truba(lig_rundir, tmp_path, capsys):
+    with pytest.raises(SystemExit) as e:
+        _setup(["--solvent", lig_rundir, "--ligand", "ACE", "--schedule", "test_short",
+                "--repeats", "1", "--cluster", "truba", "--truba-account", "akocak",
+                "--truba-ntasks", "4", "--outdir", tmp_path / "T"])
+    assert e.value.code != 0
+    assert "single-rank" in str(e.value) + capsys.readouterr().err

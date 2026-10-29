@@ -357,13 +357,19 @@ def _f(v: float, e: float | None = None, scale: float = 1.0) -> str:
     return s
 
 
-WALL_NOTE = ("co-alchemical ion(s) kept >= d_wall nm from ligand COM by a "
-             "lambda-independent wall (no correction applied)")
-
-
 def wall_note(setup: dict) -> str | None:
-    ions = setup.get("alch_ions") or {}
-    return WALL_NOTE if any(ions.values()) else None
+    """Result-file note for legs whose setup.json records a co-alchemical ion wall."""
+    walls = {l: w for l, w in (setup.get("alch_wall") or {}).items() if w}
+    if not walls:
+        return None
+    parts = []
+    for leg, w in walls.items():
+        anchors = ", ".join(f"{b['ligand_anchor_name']} (#{b['ligand_anchor_1based']})"
+                            for b in w.get("bonds", []))
+        parts.append(f"{leg}: >= {w['d_wall']:.3f} nm from ligand atom {anchors}")
+    return ("co-alchemical ion(s) kept at distance by a lambda-independent funct-10 wall "
+            "from the ligand heavy atom nearest the ligand COM (no correction applied); "
+            + "; ".join(parts))
 
 
 def write_results(outdir: Path, setup: dict, legs: dict, comb: dict, warns: list,
