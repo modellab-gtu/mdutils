@@ -43,7 +43,7 @@ abfe_setup.sh  --complex DIR --solvent DIR --ligand LIG
                [--replica 0] [--repeats 3] [--complex-ns 5] [--solvent-ns 3]
                [--schedule FILE] [--cluster gtu|truba] [--complex-node cws01] [--solvent-node cws02]
                [--truba-* as in prepare scripts] [--outdir ABFE] [--submit]
-abfe_analyze.sh ABFE_DIR [--equil-ns 0.5] [--temperature from mdp]
+abfe_analyze.sh ABFE_DIR [--equil-ns 0.5]
 ```
 
 Hydration only: `abfe_setup.sh --solvent DIR --ligand LIG` (no complex leg and no restraint).
@@ -54,7 +54,7 @@ Hydration only: `abfe_setup.sh --solvent DIR --ligand LIG` (no complex leg and n
 ABFE/
   setup.json                 # all options, versions, ligand charge, schedule, source dirs
   boresch.json               # anchors (atom indices + names), r0/θ0/φ0, force constants, ΔG_restr (kJ and kcal)
-  complex/  topol_fe.top  start.gro  index.ndx  MDP/lam_NN.mdp  rep{0..R-1}/lam_NN/  run_abfe.sbatch
+  complex/  topol_fe.top  start.gro  index.ndx  rep{0..R-1}/lam_NN/*.mdp  run_abfe.sbatch
   solvent/  (same, without restraints)
   submit_abfe.sh             # submits one array per leg × repeat
   results/  abfe_result.txt  abfe_result.csv  overlap_<leg>_rep<r>.png  convergence_<leg>_rep<r>.png
@@ -69,6 +69,7 @@ Each leg uses one MDP set with full lambda vectors (`restraint-lambdas` and `bon
   - Coulomb: 0 → 1 in steps of 0.1;
   - vdW: 0 → 1 in steps of 0.05.
 - **Solvent (31 states):** the same Coulomb and vdW ramps, no restraint.
+- **Validation (default and `--schedule`):** every value finite and in [0, 1]; equal-length, non-decreasing vectors; state 0 fully coupled (restraint = coul = vdw = 0); last state coul = vdw = 1; complex restraint ends at 1; solvent restraint all 0. An empty leg section or malformed YAML is also an error. Violations stop setup with a clean message naming the file (no traceback).
 
 ## Per-window protocol (one Slurm array task = one window)
 
@@ -142,12 +143,13 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
 - **Result:** ΔG_bind = ΔG_solvent,decouple − ΔG_complex,decouple − ΔG_restr,off (signs documented in the output), in kcal/mol and kJ/mol.
   - It is reported per repeat and as mean ± SEM over repeats.
   - Hydration ΔG_hyd = −ΔG_solvent,decouple.
+  - Charged ligand, hydration only: the decoupled object is the ligand plus its co-alchemical counter-ion(s). The quantity is labelled `dG_hyd(ligand + co-alchemical counter-ion(s))` in txt and csv with a warning (not a single-species hydration free energy; no finite-size correction). With a complex leg the ions are decoupled in both legs and largely cancel; a note says so.
 - **Warnings** (printed in the result file; they do not fail the run):
   - any neighbour overlap below 0.03;
   - forward and backward final values differ by more than 0.5 kcal/mol;
   - MBAR and TI differ by more than 0.5 kcal/mol;
   - repeat spread above 1 kcal/mol;
-  - missing or short windows. Analysis refuses a leg that has missing windows, unless `--allow-missing` is given.
+  - missing or short windows. A window is complete only if `prod.xvg` is non-empty and `prod.gro` exists; incomplete windows count as missing. Analysis refuses a leg that has missing windows, unless `--allow-missing` is given.
 
 ## Environment and installation
 

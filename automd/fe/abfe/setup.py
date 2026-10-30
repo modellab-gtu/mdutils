@@ -495,8 +495,8 @@ def run_setup(args, argv=None) -> Path:
                              "refusing to --overwrite it")
     sched_path = resolve_schedule(args.schedule)
     scheds = {leg: load_schedule(sched_path, leg) for leg in legs}
-    for s in scheds.values():
-        validate(s)
+    for leg_, s in scheds.items():
+        validate(s, leg_)
     runs = {leg: load_rundir(getattr(args, leg), args.replica) for leg in legs}
     temps = {leg: runs[leg].temperature for leg in legs}
     if args.temperature is not None:

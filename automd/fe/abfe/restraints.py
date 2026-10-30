@@ -9,7 +9,8 @@ Geometry and atom order
 -----------------------
 ``Boresch.atoms`` = (P3, P2, P1, L1, L2, L3), 0-based global indices. In MDRG
 terms L1..L3 = ``l_atoms[0..2]`` and P1..P3 = ``p_atoms[0..2]``
-(P1 = CA, then the backbone C and N of that residue).
+(P1 = CA; P2 and P3 are the backbone anchors found by MDRG, which may lie in
+neighbouring residues, e.g. ILE100:N, ALA99:C, ALA99:CA).
 
 * r      = |P1-L1|                (MDRG ``bond``)
 * thetaA = angle(P2, P1, L1)      (MDRG ``angles[1]``, reversed atom order)
@@ -168,7 +169,8 @@ def find_boresch(tpr, xtc, ligand_resname: str, T: float, *, max_frames: int = 2
 
     Ligand anchors: MDRG ``find_ligand_atoms`` (lowest-RMSF heavy atoms after
     aligning on protein CA); host anchors: ``FindHostAtoms`` (protein CA within
-    5-9 A of L1 over the trajectory, plus that residue's backbone C and N);
+    5-9 A of L1 over the trajectory, plus backbone C/N anchors that may sit in the
+    neighbouring residue);
     ``FindBoreschRestraint`` ranks candidates by summed variance and picks
     the frame closest to the mean (MDRG ``min_frame``); the equilibrium values
     are the values in that frame (same convention as MDRG's writer and

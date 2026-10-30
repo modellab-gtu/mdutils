@@ -277,3 +277,48 @@ def test_ion_wall_note(tmp_path):
     n = wall_note({"alch_ions": {"solvent": [{"name": "NA"}]}, "alch_wall": {"solvent": w}})
     assert "0.976 nm" in n and "C2 (#2)" in n and "no correction applied" in n
     assert "solvent:" in n
+
+
+def test_incomplete_window_without_prod_gro(tmp_path, capsys):
+    rep = tmp_path / "rep0"
+    shutil.copytree(DATA / "toy_solvent" / "rep0", rep)
+    (rep / "lam_01" / "prod.gro").unlink()
+    assert an.missing_windows(rep, 3) == [1]
+    (tmp_path / "x").mkdir()
+    abfe = _toy_abfe(tmp_path / "x")
+    (abfe / "solvent" / "rep0" / "lam_01" / "prod.gro").unlink()
+    with pytest.raises(SystemExit):
+        an.main([str(abfe), "--equil-ns", "0"])
+    assert "[1]" in capsys.readouterr().err
+    assert an.main([str(abfe), "--equil-ns", "0", "--allow-missing"]) == 0
+    assert "[1]" in (abfe / "results" / "abfe_result.txt").read_text()
+
+
+def test_charged_hydration_label(tmp_path):
+    comb = an.combine({"legs": ["solvent"], "ligand_charge": -1},
+                      {("solvent", 0): _lr(dg_mbar=4.0, dg_ti=4.0)}, None)
+    assert comb["quantity"] == "dG_hyd(ligand + co-alchemical counter-ion(s))"
+    assert any("not a single-species hydration" in w for w in an.warnings({}, comb))
+    abfe = _toy_abfe(tmp_path)
+    meta = json.loads((abfe / "setup.json").read_text())
+    meta["ligand_charge"] = -1
+    (abfe / "setup.json").write_text(json.dumps(meta))
+    assert an.main([str(abfe), "--equil-ns", "0"]) == 0
+    txt = (abfe / "results" / "abfe_result.txt").read_text()
+    csv_ = (abfe / "results" / "abfe_result.csv").read_text()
+    assert "dG_hyd(ligand + co-alchemical counter-ion(s)) (MBAR" in txt
+    assert "no finite-size correction" in txt
+    assert "dG_hyd(ligand + co-alchemical counter-ion(s))" in csv_
+    # neutral stays plain
+    assert an.combine({"legs": ["solvent"], "ligand_charge": 0},
+                      {("solvent", 0): _lr()}, None)["quantity"] == "dG_hyd"
+
+
+def test_charged_binding_note(tmp_path):
+    abfe = _toy_abfe(tmp_path, complex_too=True)
+    meta = json.loads((abfe / "setup.json").read_text())
+    meta["ligand_charge"] = 1
+    (abfe / "setup.json").write_text(json.dumps(meta))
+    assert an.main([str(abfe), "--equil-ns", "0"]) == 0
+    txt = (abfe / "results" / "abfe_result.txt").read_text()
+    assert "largely cancel" in txt and "dG_bind (MBAR" in txt

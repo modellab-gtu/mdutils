@@ -197,11 +197,13 @@ def _window_file(rep_dir: Path, i: int) -> Path:
 
 
 def missing_windows(rep_dir, n_states: int) -> list[int]:
-    """State indices whose lam_NN/prod.xvg is absent or empty."""
+    """State indices of incomplete windows: lam_NN/prod.xvg absent or empty, or no
+    prod.gro (production running or crashed)."""
     out = []
     for i in range(n_states):
         f = _window_file(rep_dir, i)
-        if not f.is_file() or f.stat().st_size == 0:
+        if (not f.is_file() or f.stat().st_size == 0
+                or not (f.parent / "prod.gro").is_file()):
             out.append(i)
     return out
 
@@ -236,6 +238,7 @@ def combine(setup: dict, legs: dict, boresch_dg) -> dict:
     (negative) or None for hydration.
     """
     binding = "complex" in setup["legs"]
+    charged_hyd = (not binding) and float(setup.get("ligand_charge") or 0) != 0
     reps = sorted({r for (_, r) in legs})
     per, per_kj, skipped = {}, {}, []
     for r in reps:
@@ -263,7 +266,10 @@ def combine(setup: dict, legs: dict, boresch_dg) -> dict:
         else:
             mean[est] = (float(vals.mean()), float(vals.std(ddof=1) / math.sqrt(len(vals))))
     return {
-        "quantity": "dG_bind" if binding else "dG_hyd",
+        "quantity": ("dG_bind" if binding else
+                     "dG_hyd(ligand + co-alchemical counter-ion(s))" if charged_hyd
+                     else "dG_hyd"),
+        "charged_hyd": charged_hyd,
         "formula": ("dG_bind = dG_solvent,decouple - dG_complex,decouple - dG_restr,off"
                     if binding else "dG_hyd = -dG_solvent,decouple"),
         "restr_kJ": boresch_dg if binding else None,
@@ -273,6 +279,11 @@ def combine(setup: dict, legs: dict, boresch_dg) -> dict:
                       "statistical error of the single repeat",
         "skipped_repeats": skipped,
     }
+
+
+CHARGED_HYD_WARNING = (
+    "charged ligand: hydration value includes the counter-ion(s) decoupled with it and "
+    "is not a single-species hydration free energy; no finite-size correction")
 
 
 def warnings(legs: dict, combined: dict | None = None) -> list[str]:
@@ -295,6 +306,8 @@ def warnings(legs: dict, combined: dict | None = None) -> list[str]:
         out.extend(f"{tag}: {n}" if not n.startswith(leg) else n for n in res.notes)
     if combined:
         q = combined["quantity"]
+        if combined.get("charged_hyd"):
+            out.append(CHARGED_HYD_WARNING)
         for r in combined["skipped_repeats"]:
             out.append(f"rep{r}: a leg is missing, repeat left out of {q}")
         vals = [v["MBAR"][0] for v in combined["per_repeat"].values()]
@@ -391,6 +404,9 @@ def write_results(outdir: Path, setup: dict, legs: dict, comb: dict, warns: list
     wn = wall_note(setup)
     if wn:
         L.append("note: " + wn)
+    if binding and float(setup.get("ligand_charge") or 0) != 0:
+        L.append("note: charged ligand: the co-alchemical ion(s) are decoupled in both "
+                 "legs and largely cancel in dG_bind (no correction applied)")
     L.append("")
     L.append("Sign convention")
     L.append("  dG_<leg>,decouple = G(last lambda state, ligand decoupled) - G(state 0, coupled)")
@@ -401,6 +417,9 @@ def write_results(outdir: Path, setup: dict, legs: dict, comb: dict, warns: list
         L.append("  (more negative dG_bind = stronger binding)")
     else:
         L.append(f"  {comb['formula']}   (hydration free energy; no complex leg)")
+        if comb.get("charged_hyd"):
+            L.append("  (charged ligand: the decoupled object is the ligand plus its "
+                     "co-alchemical counter-ion(s))")
     L.append("")
     if binding:
         rk = comb["restr_kJ"]

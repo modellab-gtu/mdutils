@@ -215,7 +215,7 @@ ABFE/
 ```
 
 Each window runs steep EM, NVT 100 ps, NPT 200 ps (C-rescale), then production; the tpr is rebuilt inside the job.
-Restart a failed window with `sbatch --array=N rep<r>/run_abfe.sbatch`: finished steps are skipped and production
+Restart a failed window with `cd <leg>/rep<r> && sbatch --array=N run_abfe.sbatch`: finished steps are skipped and production
 resumes from its checkpoint.
 
 ### Lambda schedules
@@ -236,6 +236,19 @@ the complex leg. Its analytic correction (release of the decoupled ligand into V
 The net charge is compensated by co-alchemical monovalent counter-ion(s) that are decoupled with the ligand. They are
 chosen at least min(1.5 nm, 0.45 x box) from the ligand (swapped with a far water molecule if needed) and held in
 place by a 0.5 nm flat-bottom restraint.
+
+- **Ligand-ion wall.** Each ion also gets a lambda-independent one-sided distance wall (`[ intermolecular_interactions ]`,
+  function type 10, k = 1000 kJ mol-1 nm-2, B state = A state) to the ligand heavy atom nearest the ligand centre of
+  mass; d_wall = round(min(1.0, 0.8 x d_min), 3) nm. Without it the free ligand forms a contact ion pair with its
+  ion. No free-energy correction is applied (a note line is written to the result file).
+- If the wall excludes more than 10 % of the box, (4/3) pi d_wall^3 / V, setup warns of finite-size effects:
+  re-prepare the ligand box with more padding.
+- Legs with a wall run `mdrun` with `-rdd 1.0` and need a single rank: setup refuses `--truba-ntasks > 1` for a
+  charged ligand.
+- Hydration only (`--solvent` without `--complex`): the decoupled object is the ligand plus its co-alchemical
+  counter-ion(s), so the result is labelled `dG_hyd(ligand + co-alchemical counter-ion(s))` with a warning. It is not
+  a single-species hydration free energy and no finite-size correction is applied. In ABFE the ions are decoupled in
+  both legs and largely cancel (no correction); the result file says so.
 
 ### Analysis
 

@@ -72,4 +72,4 @@ Alchemical decoupling of the ligand from bulk solvent — the reference leg of t
 
 - Mirrors Aim 3 λ schedule and analysis workflow
 - Combined with Aim 3 results: ΔG_bind = ΔG_solvent − ΔG_complex − ΔG_restr (decoupling legs; see README)
-- Supports both GROMACS and AMBER alchemical frameworks
+- Supports the GROMACS alchemical framework (Amber: Phase 4a, planned)

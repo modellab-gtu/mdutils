@@ -93,3 +93,62 @@ def test_no_pull_keys_any_leg():
     base = {"ref-t": "300 300", "tc-grps": "LIG Water_and_ions", "tau-t": "1 1"}
     m = fe_mdps(base, default_schedule("solvent"), "LIG", 3, 1.0, 1)
     assert not any(k.startswith("pull") for d in m.values() for k in d)
+
+
+def _yaml(tmp_path, text):
+    f = tmp_path / "sched.yaml"
+    f.write_text(text)
+    return f
+
+
+GOOD_C = "restraint: [0, 1]\n  coul: [0, 1]\n  vdw: [0, 1]\n"
+
+
+@pytest.mark.parametrize("bad", [
+    "restraint: [0, 1]\n  coul: [0, 0.95]\n  vdw: [0, 1]\n",      # coul ends < 1
+    "restraint: [0, 1]\n  coul: [0, 1]\n  vdw: [0, 0.9]\n",        # vdw ends < 1
+    "restraint: [0, 1]\n  coul: [0, 1]\n  vdw: []\n",              # vdw lost
+    "restraint: [0, 0.5]\n  coul: [0, 1]\n  vdw: [0, 1]\n",        # restraint ends < 1
+    "restraint: [0, 1]\n  coul: [0, .nan, 1]\n  vdw: [0, 1]\n",    # NaN
+    "restraint: [0, 1]\n  coul: [0, 1.5]\n  vdw: [0, 1]\n",        # out of range
+])
+def test_load_rejects_bad_complex(tmp_path, bad):
+    with pytest.raises(ValueError, match="sched.yaml"):
+        load_schedule(_yaml(tmp_path, "complex:\n  " + bad), "complex")
+
+
+def test_load_rejects_start_not_coupled(tmp_path):
+    with pytest.raises(ValueError, match="state 0"):
+        load_schedule(_yaml(tmp_path, "complex:\n  restraint: [0.2, 1]\n  coul: [0, 1]\n"
+                                      "  vdw: [0, 1]\n"), "complex")
+    with pytest.raises(ValueError, match="state 0"):
+        validate(Schedule([0, 0, 0], [0.1, 0.5, 1], [0, 0, 1]))
+
+
+def test_load_rejects_bad_solvent(tmp_path):
+    with pytest.raises(ValueError, match="solvent leg"):
+        load_schedule(_yaml(tmp_path, "solvent:\n  restraint: [0, 1]\n  coul: [0, 1]\n"
+                                      "  vdw: [0, 1]\n"), "solvent")
+    with pytest.raises(ValueError):
+        load_schedule(_yaml(tmp_path, "solvent:\n  coul: [0, 0.5]\n  vdw: []\n"),
+                      "solvent")
+
+
+def test_load_rejects_empty_or_malformed(tmp_path):
+    with pytest.raises(ValueError, match="sched.yaml"):
+        load_schedule(_yaml(tmp_path, "complex:\nsolvent:\n  coul: [0, 1]\n"), "complex")
+    with pytest.raises(ValueError, match="sched.yaml"):
+        load_schedule(_yaml(tmp_path, "complex: [unclosed\n"), "complex")
+    with pytest.raises(ValueError, match="sched.yaml"):
+        load_schedule(_yaml(tmp_path, "complex:\n  coul: 3\n"), "complex")
+
+
+def test_validate_nan():
+    with pytest.raises(ValueError, match="finite"):
+        validate(Schedule([0, 1], [0, float("nan")], [0, 1]))
+
+
+def test_shipped_schedules_pass():
+    for leg in ("complex", "solvent"):
+        validate(default_schedule(leg), leg)
+        validate(load_schedule(SHORT, leg), leg)
