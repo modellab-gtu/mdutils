@@ -127,7 +127,7 @@ A failed window is rerun with `sbatch --array=N run_abfe.sbatch`. Steps already 
   - d_wall = round(min(1.0, 0.8 × d_min), 3) nm. It is zero above d_wall and harmonic below.
   - In the complex leg the wall bonds share the single `[ intermolecular_interactions ]` section with the Boresch terms.
   - The pull code is not used: it aborts when the group distance exceeds 0.49 × the box edge, which free ions do.
-  - Intermolecular bonded interactions need single-rank mdrun (`-ntmpi 1`, no domain decomposition), as in the current protocol; setup refuses `--truba-ntasks > 1` for a charged ligand.
+  - Intermolecular bonded interactions need single-rank mdrun (`-ntmpi 1`, no domain decomposition), as in the current protocol; setup refuses `--truba-ntasks > 1` for a charged ligand. mdrun still builds a 1×1×1 domain decomposition on one rank and sizes the cell from the longest bonded interaction at start (the wall bond, often > 2 nm), so the leg's mdrun lines get `-rdd 1.0`; with one rank all atoms are local and the wall energy is unchanged (verified by rerun).
   - If the wall excludes more than 10 % of the box, (4/3)π d_wall³ / V, setup warns of finite-size effects. The start structure must already satisfy the wall, otherwise setup stops.
   - No free-energy correction is applied: the wall enforces the non-interacting ligand/ion reference state that the co-alchemical method assumes. `abfe_analyze` prints a note line.
 - **Checks:** setup asserts that the total charge is 0 in state A and in state B. It also asserts that the ions and the ligand are both at full charge when Coulomb λ = 0 and both at zero charge when Coulomb λ = 1.

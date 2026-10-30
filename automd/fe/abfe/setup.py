@@ -540,7 +540,8 @@ def run_setup(args, argv=None) -> Path:
         for leg in legs:
             for r in range(args.repeats):
                 p = write_leg_sbatch(partial / leg, leg, meta["n_states"][leg], r,
-                                     args.cluster, node_opts(args, leg))
+                                     args.cluster, node_opts(args, leg),
+                                     wall=bool(meta["alch_wall"].get(leg)))
                 sbatches.append(str(p.relative_to(partial)))
         write_submit(partial, sbatches)
         meta["sbatch"] = sbatches

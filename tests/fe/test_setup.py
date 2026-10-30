@@ -195,6 +195,7 @@ def test_setup_charged_cation(charged_lig_rundir, tmp_path, gmx):
     assert len(meta["alch_ions"]["solvent"]) == 1
     assert "CL_ALCH" in (out / "solvent" / "topol_fe.top").read_text()
     assert _grompp_all(gmx, out / "solvent") == 1 * 3 * 4
+    assert (out / "solvent" / "rep0" / "run_abfe.sbatch").read_text().count(" -rdd 1.0") == 4
 
 
 def test_sbatch_restart(tmp_path):
@@ -443,3 +444,20 @@ def test_wall_refuses_multirank_truba(lig_rundir, tmp_path, capsys):
                 "--truba-ntasks", "4", "--outdir", tmp_path / "T"])
     assert e.value.code != 0
     assert "single-rank" in str(e.value) + capsys.readouterr().err
+
+
+def test_sbatch_wall_rdd(tmp_path):
+    # GROMACS sets up a 1x1x1 domain decomposition even on one rank and sizes the
+    # cell from the longest bonded interaction at start: the ion-wall bond (often
+    # > 2 nm) aborts small boxes unless -rdd caps it. All atoms are local on one
+    # rank, so the wall energy is unaffected (verified by rerun).
+    from automd.fe.abfe.slurm import write_leg_sbatch
+    leg = tmp_path / "solvent"
+    (leg / "rep0").mkdir(parents=True)
+    t = write_leg_sbatch(leg, "solvent", 3, 0, "gtu", {"node": "cws02"}, wall=True).read_text()
+    assert t.count(" -rdd 1.0") == 4
+    t0 = write_leg_sbatch(leg, "solvent", 3, 0, "gtu", {"node": "cws02"}).read_text()
+    assert "-rdd" not in t0
+    opts = {"account": "akocak", "ntasks": 1}
+    tt = write_leg_sbatch(leg, "solvent", 3, 0, "truba", opts, wall=True).read_text()
+    assert tt.count(" -rdd 1.0") == 4

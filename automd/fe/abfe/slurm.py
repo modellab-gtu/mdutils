@@ -65,13 +65,22 @@ def _header(leg: str, n_states: int, repeat: int, cluster: str, o: dict):
 
 
 def write_leg_sbatch(leg_dir, leg: str, n_states: int, repeat: int, cluster: str,
-                     node_opts: dict) -> Path:
-    """Write ``<leg_dir>/rep<repeat>/run_abfe.sbatch``: one array task per window."""
+                     node_opts: dict, wall: bool = False) -> Path:
+    """Write ``<leg_dir>/rep<repeat>/run_abfe.sbatch``: one array task per window.
+
+    ``wall``: the leg has a co-alchemical ion wall. mdrun sets up a 1x1x1 domain
+    decomposition even on one rank and sizes the cell from the longest bonded
+    interaction at start; the wall bond (often > 2 nm) then aborts small boxes.
+    ``-rdd 1.0`` caps that check; with one rank every atom is local, so the wall
+    energy is unchanged (multi-rank runs with a wall are refused by setup).
+    """
     if n_states < 1:
         raise ValueError("n_states must be >= 1")
     rep_dir = Path(leg_dir) / f"rep{repeat}"
     rep_dir.mkdir(parents=True, exist_ok=True)
     head, load, mdrun_em, mdrun = _header(leg, n_states, repeat, cluster, dict(node_opts))
+    if wall:
+        mdrun_em, mdrun = mdrun_em + " -rdd 1.0", mdrun + " -rdd 1.0"
     head_txt = "\n".join(head)
     text = f"""#!/bin/bash
 {head_txt}
