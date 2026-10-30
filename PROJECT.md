@@ -49,9 +49,9 @@ Pipeline for preparing a solvated ligand-only system and running classical MD �
 
 ## Aim 3 — Protein + Ligand + Solvent Alchemical Free Energy (complex leg)
 
-**Directory:** `automd/prolig_normalMD/` *(to be extended)*
+**Directory:** `automd/fe/abfe/` (`bin/abfe_setup.sh`, `bin/abfe_analyze.sh`)
 
-**Status:** Planned.
+**Status:** Implemented for GROMACS (Boresch restraint, MBAR/TI analysis); Amber planned in Phase 4a.
 
 Alchemical decoupling of the ligand from the solvated protein–ligand complex for absolute binding free energy (ABFE) calculations.
 
@@ -64,12 +64,12 @@ Alchemical decoupling of the ligand from the solvated protein–ligand complex f
 
 ## Aim 4 — Ligand + Solvent Alchemical Free Energy (solvent leg)
 
-**Directory:** `automd/ligprep/` *(to be extended)*
+**Directory:** `automd/fe/abfe/` (solvent leg; hydration free energy with `abfe_setup.sh --solvent`)
 
-**Status:** Planned.
+**Status:** Implemented for GROMACS; Amber planned in Phase 4a.
 
 Alchemical decoupling of the ligand from bulk solvent — the reference leg of the ABFE thermodynamic cycle.
 
 - Mirrors Aim 3 λ schedule and analysis workflow
-- Combined with Aim 3 results: ΔG_bind = ΔG_complex − ΔG_solvent
-- Supports both GROMACS and AMBER alchemical frameworks
+- Combined with Aim 3 results: ΔG_bind = ΔG_solvent − ΔG_complex − ΔG_restr (decoupling legs; see README)
+- Supports the GROMACS alchemical framework (Amber: Phase 4a, planned)

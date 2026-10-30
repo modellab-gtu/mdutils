@@ -173,6 +173,107 @@ Both scripts write, next to `topol.top`:
   with OpenMP threads on TRUBA.
 - `bin/mdprep-prolig` and `bin/mdprep-lig` are short wrappers for the two scripts.
 
+## Free energy (ABFE / hydration)
+
+Absolute binding free energies (double decoupling with a Boresch restraint) and hydration free energies, GROMACS
+only (Amber is planned). Code: `automd/fe/abfe/`; launchers `bin/abfe_setup.sh` and `bin/abfe_analyze.sh`
+(`-h` lists every option).
+
+### Workflow
+
+```bash
+mdprep-prolig ... && mdprep-lig ...     # 1. prepare both MD folders (same ligand parameters)
+bash submit_md.sh                       # 2. run MD replicas in each folder (the restraint comes from this MD)
+abfe_setup.sh --complex PROLIG_DIR --solvent LIG_DIR --ligand JZ4 --submit   # 3. build + submit all windows
+abfe_analyze.sh ABFE                    # 4. MBAR/TI, Boresch correction, warnings
+# hydration free energy only (no protein): abfe_setup.sh --solvent LIG_DIR --ligand JZ4
+```
+
+- Both legs must share the same ligand parameters (atom names, types, masses, charges; checked) and temperature;
+  if the two `md.mdp` files differ, give `--temperature T` (sets `ref-t`/`gen-temp` of every FE stage of both legs).
+- `--replica R` picks the MD replica (default 0) whose `md_R.gro/tpr/xtc` are used.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--repeats N` | 3 | independent repeats per leg |
+| `--complex-ns` / `--solvent-ns` | 5 / 3 | production ns per window |
+| `--schedule NAME\|FILE.yaml` | built-in | lambda schedule; `test_short` for smoke tests, or a custom YAML |
+| `--cluster gtu\|truba` | `gtu` | `--complex-node` (cws01, GPU), `--solvent-node` (cws02, CPU, 8 threads); `--truba-*` as above |
+| `--outdir`, `--overwrite` | `ABFE` | output folder (must be new unless `--overwrite`) |
+| `--force-restraint` | off | accept a Boresch anchor angle within 10 deg of 0/180 |
+| `--submit` | off | run `submit_abfe.sh` at the end (GTU) |
+
+### Output layout
+
+```
+ABFE/
+  setup.json  boresch.json  submit_abfe.sh
+  complex|solvent/
+    topol_fe.top  start.gro  posre_ref.gro  index.ndx
+    rep<r>/run_abfe.sbatch  rep<r>/lam_NN/{em,nvt,npt,prod}.*
+  results/                       (after abfe_analyze.sh)
+```
+
+Each window runs steep EM, NVT 100 ps, NPT 200 ps (C-rescale), then production; the tpr is rebuilt inside the job.
+Restart a failed window with `cd <leg>/rep<r> && sbatch --array=N run_abfe.sbatch`: finished steps are skipped and production
+resumes from its checkpoint.
+
+### Lambda schedules
+
+- Complex, 36 states: restraint `0 0.05 0.1 0.2 0.5 1`, then Coulomb `0..1` step 0.1, then van der Waals `0..1`
+  step 0.05. Solvent, 31 states: Coulomb, then van der Waals.
+- Soft-core: `sc-alpha 0.5`, `sc-power 1`, `sc-r-power 6`; `couple-intramol = no`.
+
+### Restraint
+
+The Boresch restraint (1 distance, 2 angles, 3 dihedrals) is derived from the MD replica with
+MDRestraintsGenerator, applied as a bonded-lambda (`bonded-lambdas` = `restraint-lambdas`) and switched on first in
+the complex leg. Its analytic correction (release of the decoupled ligand into V0 = 1.66054 nm3) is stored in
+`boresch.json`.
+
+### Charged ligands
+
+The net charge is compensated by co-alchemical monovalent counter-ion(s) that are decoupled with the ligand. They are
+chosen at least min(1.5 nm, 0.45 x box) from the ligand (swapped with a far water molecule if needed) and held in
+place by a 0.5 nm flat-bottom restraint.
+
+- **Ligand-ion wall.** Each ion also gets a lambda-independent one-sided distance wall (`[ intermolecular_interactions ]`,
+  function type 10, k = 1000 kJ mol-1 nm-2, B state = A state) to the ligand heavy atom nearest the ligand centre of
+  mass; d_wall = round(min(1.0, 0.8 x d_min), 3) nm. Without it the free ligand forms a contact ion pair with its
+  ion. No free-energy correction is applied (a note line is written to the result file).
+- If the wall excludes more than 10 % of the box, (4/3) pi d_wall^3 / V, setup warns of finite-size effects:
+  re-prepare the ligand box with more padding.
+- Legs with a wall run `mdrun` with `-rdd 1.0` and need a single rank: setup refuses `--truba-ntasks > 1` for a
+  charged ligand.
+- Hydration only (`--solvent` without `--complex`): the decoupled object is the ligand plus its co-alchemical
+  counter-ion(s), so the result is labelled `dG_hyd(ligand + co-alchemical counter-ion(s))` with a warning. It is not
+  a single-species hydration free energy and no finite-size correction is applied. In ABFE the ions are decoupled in
+  both legs and largely cancel (no correction); the result file says so.
+
+### Analysis
+
+`abfe_analyze.sh ABFE [--equil-ns 0.5] [--allow-missing] [--outdir DIR]` reads `setup.json` (temperature, number of
+states), discards the equilibration, decorrelates each window and runs MBAR (main estimate) and TI per leg and
+repeat, then combines the legs:
+
+```
+dG_bind = dG_solvent,decouple - dG_complex,decouple - dG_restr,off
+dG_hyd  = -dG_solvent,decouple
+```
+
+(`dG_restr,off` is negative.) Output in `ABFE/results/`: `abfe_result.txt`, `abfe_result.csv`,
+`overlap_<leg>_rep<r>.png`, `convergence_<leg>_rep<r>.png`. Values are given in kcal/mol and kJ/mol, as the mean and
+standard error over the repeats. Warnings are printed for: minimum neighbour overlap < 0.03; |first-half - second-half|
+> 0.5 kcal/mol; |MBAR - TI| > 0.5 kcal/mol; repeat spread (max - min) > 1.0 kcal/mol. Missing windows stop the
+analysis unless `--allow-missing`.
+
+### Resources
+
+- Complex leg on cws01 (GPU): about 150 ns/day for T4L-size systems in FE windows. For example 36 windows x 5 ns x
+  3 repeats = 540 ns, i.e. a few days of GPU time. Solvent leg on cws02 CPU, 8 threads per window.
+- TRUBA: `--cluster truba` (same options as `mdprep-*`; one rank with OpenMP threads per window).
+- Needs alchemlyb, pymbar and MDRestraintsGenerator (see [INSTALL.md](INSTALL.md)).
+
 ## legacy/
 
 Old scripts kept for reference (not used): the former ligand/conformer utilities and the old TRUBA run script.
