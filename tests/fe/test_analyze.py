@@ -322,3 +322,20 @@ def test_charged_binding_note(tmp_path):
     assert an.main([str(abfe), "--equil-ns", "0"]) == 0
     txt = (abfe / "results" / "abfe_result.txt").read_text()
     assert "largely cancel" in txt and "dG_bind (MBAR" in txt
+
+
+def test_fwd_bwd_timeout_becomes_note(monkeypatch):
+    """A forward/backward fit that runs past the limit is cut off and reported."""
+    import time
+    from alchemtest.gmx import load_benzene
+    from automd.fe.abfe import analyze as an
+
+    # a spawned child needs well over 0.01 s just to import: the limit always fires
+    monkeypatch.setattr(an, "CONV_TIMEOUT_S", 0.01)
+    t = time.time()
+    res = an.analyze_files(load_benzene()["data"]["Coulomb"], 300.0, equil_ns=0.0)
+    assert time.time() - t < 120
+    assert math.isnan(res.fwd_bwd_diff) and res.convergence is None
+    assert any("forward/backward convergence failed" in n and "TimeoutError" in n
+               for n in res.notes)
+    assert math.isfinite(res.dg_mbar)

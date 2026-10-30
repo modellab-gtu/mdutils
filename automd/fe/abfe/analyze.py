@@ -43,6 +43,43 @@ SPREAD_MAX = 1.0
 MIN_SAMPLES = 10           # fewer after subsampling -> use the unsubsampled window
 CONV_OVERLAP_FLOOR = 1e-4  # below this MBAR is meaningless: skip the 20-fit convergence
 CONV_BLOCKS = 10
+CONV_TIMEOUT_S = 300  # wall-clock limit for the forward/backward MBAR fits
+
+
+def _fwd_bwd_child(us, num, q):
+    from alchemlyb.convergence import forward_backward_convergence
+    try:
+        q.put(("ok", forward_backward_convergence(us, "MBAR", num=num)))
+    except Exception as e:  # reported by the parent
+        q.put(("err", f"{type(e).__name__}: {e}"))
+
+
+def fwd_bwd_with_timeout(us, num: int = CONV_BLOCKS, timeout: float = CONV_TIMEOUT_S):
+    """alchemlyb forward/backward convergence in a child process with a time limit.
+
+    pymbar's solver can iterate for very long on one partial block (seen with
+    FreeSolv cyclohexane); the main estimate must not hang on this diagnostic.
+    Raises TimeoutError or RuntimeError; the caller turns them into a note.
+    The child is spawned, not forked: forking after numpy/pymbar have started
+    threads can deadlock the child.
+    """
+    import multiprocessing as mp
+    import queue as _queue
+
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+    p = ctx.Process(target=_fwd_bwd_child, args=(us, num, q), daemon=True)
+    p.start()
+    try:
+        status, val = q.get(timeout=timeout)
+    except _queue.Empty:
+        p.terminate()
+        p.join(5)
+        raise TimeoutError(f"forward/backward MBAR fits exceeded {timeout:g} s") from None
+    p.join(5)
+    if status == "err":
+        raise RuntimeError(val)
+    return val
 SHORT_TOL = 0.99           # window shorter than 99 % of prod_ns -> warning
 
 
@@ -111,7 +148,6 @@ def analyze_files(files, T: float, equil_ns: float, *, prod_ns: float | None = N
                   label: str = "") -> LegResult:
     """MBAR + TI + overlap + forward/backward on the given window dhdl files."""
     import alchemlyb
-    from alchemlyb.convergence import forward_backward_convergence
     from alchemlyb.estimators import MBAR, TI
     from alchemlyb.parsing.gmx import extract_dHdl, extract_u_nk
     from alchemlyb.preprocessing import decorrelate_dhdl, decorrelate_u_nk, slicing
@@ -181,7 +217,7 @@ def analyze_files(files, T: float, equil_ns: float, *, prod_ns: float | None = N
                      f"{min_ov:.2g} < {CONV_OVERLAP_FLOOR:g})")
     else:
         try:
-            conv = forward_backward_convergence(us, "MBAR", num=CONV_BLOCKS)
+            conv = fwd_bwd_with_timeout(us, CONV_BLOCKS, timeout=CONV_TIMEOUT_S)
             half = conv.iloc[CONV_BLOCKS // 2 - 1]  # 50 % of the data from each end
             fwd_bwd = abs(float(half["Forward"]) - float(half["Backward"])) * kT
         except Exception as e:
