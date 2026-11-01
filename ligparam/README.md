@@ -16,7 +16,7 @@ phosphate (−2).
 - `--charge N` only cross-checks: ligparam stops if N disagrees with the file.
 - `--protonate-ph 7.4` re-protonates with Open Babel first (this changes the charge; check the result).
 
-## Geometry before the charges (`--opt`, GAFF2 route)
+## Geometry for the charges (`--opt`, GAFF2 route, `abcg2`/`bcc` charges)
 ```
 ligparam -i lig.sdf                          # --opt am1 (default): antechamber's own AM1 minimisation, as before
 ligparam -i lig.sdf --opt aimnet2            # AIMNet2 relaxation first (also uma | ani2x | mace-off), then AM1 maxcyc=0
@@ -26,12 +26,12 @@ ligparam -i lig.sdf --opt hf --geom <outdir>/opt_hf.log
 ligparam -i lig.sdf --opt hf --local         # the same, Gaussian in the foreground
 ligparam -i lig.sdf --opt none               # charges on the input geometry (AM1 maxcyc=0)
 ```
-- With any `--opt` other than `am1`, AM1 runs with `maxcyc=0` on the given geometry, and the output coordinates are that
-  geometry fitted (best rigid fit) onto the input pose. `ligparam.json` records `opt`.
-- ANI-2x and MACE-OFF are neutral-only, ANI-2x covers H C N O S F Cl: a ligand they can't treat falls back to `hf` (said
-  on screen and in `ligparam.json`).
-- `--opt` matters for `abcg2`/`bcc`. For `nagl` and `user` charges the geometry only changes the output coordinates.
-  `--ff openff` does not take `--opt`.
+- The `--opt` geometry is used for the charges only: AM1 runs with `maxcyc=0` on it. **Every output keeps the input
+  coordinates.** `ligparam.json` records `opt` (plus `opt_requested`, `opt_note`, `geom`).
+- The NNP models need covparam (`module load covparam/1.0`); `hf` and `none` don't.
+- ANI-2x and MACE-OFF are neutral-only, ANI-2x covers H C N O S F Cl: a ligand they can't treat falls back to `hf`
+  (said on screen, kept in `opt_hf.json` next to the job and recorded in `ligparam.json` after the `--geom` rerun).
+- `nagl`/`user` charges have no AM1 step, and `--ff openff` assigns its own charges: these refuse `--opt`.
 
 ## Output (folder `<name>_<ff>_<charges>/`)
 | File | Use |

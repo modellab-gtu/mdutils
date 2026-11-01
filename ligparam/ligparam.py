@@ -5,9 +5,10 @@ GAFF2 route : SDF/MOL2 -> antechamber (gaff2 types; bcc | abcg2 | nagl | user ch
               -> LIG.prmtop/inpcrd/lib/frcmod/mol2, ParmEd -> LIG.top/LIG.itp/LIG.gro, LIG.xml (OpenMM).
 OpenFF route: SDF -> OpenFF Sage (openff-2.2.1) + NAGL or AM1-BCC charges -> Interchange -> same output set.
 Net charge  : taken from the SDF formal charges (--charge auto), never re-perceived from a PDB.
-Geometry    : --opt am1 (default) = antechamber's own AM1 minimisation, as always. Any other --opt relaxes the
-              ligand first (hf = Gaussian HF/6-31G*; aimnet2|uma|ani2x|mace-off = NNP via covparam.opt; none = as
-              given), puts it back onto the input pose (best fit) and runs AM1 with maxcyc=0 on that geometry.
+Geometry    : --opt am1 (default) = antechamber's own AM1 minimisation, as always (abcg2/bcc). Any other --opt
+              relaxes the ligand first (hf = Gaussian HF/6-31G*; aimnet2|uma|ani2x|mace-off = NNP via covparam.opt;
+              none = as given) and runs AM1 with maxcyc=0 on that geometry. The geometry is used for the charges only:
+              every output keeps the input coordinates.
 """
 import argparse, json, os, shlex, shutil, subprocess as sp, sys, datetime
 
@@ -45,12 +46,12 @@ def main():
     ap.add_argument("--openff-ff", default="openff-2.2.1.offxml")
     ap.add_argument("--protonate-ph", type=float, default=None, help="re-protonate with Open Babel at this pH first (changes the net charge!)")
     ap.add_argument("--opt", choices=OPT_CHOICES, default=None,
-                    help="geometry before the charges: am1 (default; antechamber's AM1 minimisation) | hf (Gaussian "
-                         "HF/6-31G* Opt on cws02; writes opt_hf.gjf + run_opt.sh, then rerun with --geom) | aimnet2 | "
-                         "uma | ani2x | mace-off (NNP) | none (input geometry). Not am1: AM1 runs with maxcyc=0 and the "
-                         "output coordinates are the optimised geometry fitted onto the input pose")
-    ap.add_argument("--geom", default=None, help="optimised geometry to use (Gaussian .log from run_opt.sh, or .xyz in "
-                                                 "the input's atom order); implies --opt hf unless --opt is given")
+                    help="geometry for the AM1 step of abcg2/bcc charges: am1 (default; antechamber's AM1 minimisation) | "
+                         "hf (Gaussian HF/6-31G* Opt on cws02; writes opt_hf.gjf + run_opt.sh, then rerun with --geom) | "
+                         "aimnet2 | uma | ani2x | mace-off (NNP; needs covparam) | none (input geometry). Not am1: AM1 runs "
+                         "with maxcyc=0 on that geometry. Charges only: all outputs keep the input coordinates")
+    ap.add_argument("--geom", default=None, help="--opt hf: the optimised geometry (Gaussian .log from run_opt.sh, or .xyz "
+                                                 "in the input's atom order); implies --opt hf")
     ap.add_argument("--local", action="store_true", help="--opt hf: run Gaussian here in the foreground (no Slurm job)")
     a = ap.parse_args()
 
@@ -58,8 +59,12 @@ def main():
     if a.ff == "openff" and cm not in ("nagl", "bcc"): die("--ff openff takes --charge-model nagl or bcc")
     if cm == "user" and not a.input.lower().endswith(".mol2"): die("--charge-model user needs a .mol2 with charges")
     opt = a.opt or ("hf" if a.geom else "am1")
-    if a.geom and opt == "am1": die("--geom is an optimised geometry; --opt am1 would re-optimise it (use --opt hf, an NNP name or none)")
+    if a.geom and opt != "hf": die(f"--geom is the result of the --opt hf job; it can't be combined with --opt {opt}")
     if opt != "am1" and a.ff != "gaff2": die("--opt applies to --ff gaff2 (OpenFF assigns its own charges); drop --opt")
+    if opt != "am1" and cm not in ("abcg2", "bcc"):
+        die(f"--opt sets the geometry of the AM1 step of abcg2/bcc charges; --charge-model {cm} has no AM1 step "
+            "(and the outputs keep the input coordinates), so --opt would change nothing: drop it")
+    if a.local and opt != "hf": die("--local applies to --opt hf")
     if a.geom: a.geom = os.path.abspath(a.geom)
     a.input = os.path.abspath(a.input); inp = a.input; stem = os.path.splitext(os.path.basename(inp))[0]
     out = os.path.abspath(a.outdir or f"{stem}_{a.ff}_{cm}")
@@ -77,20 +82,25 @@ def main():
             die(f"--charge {a.charge} disagrees with the SDF formal charges (sum {q_formal}); fix the input or its protonation")
     q = q_formal
     nH = sum(1 for x in m.GetAtoms() if x.GetAtomicNum() == 1)
-    opt_note = None
+    opt_info = {}
     if opt != "am1":
-        m, opt, opt_note = pre_optimise(m, q, opt, a, out, log)
+        mq, opt_info = pre_optimise(m, q, opt, a, out, log)
+        opt = opt_info["opt"]
+        mq.SetProp("_Name", R); w = Chem.SDWriter(os.path.join(out, "charge_geom.sdf")); w.write(mq); w.close()
     sdf = os.path.join(out, "input.sdf")
     m.SetProp("_Name", R); w = Chem.SDWriter(sdf); w.write(m); w.close()
     os.chdir(out)
 
     if a.ff == "gaff2":
         if cm in ("abcg2", "bcc"):
-            ek = "" if opt == "am1" else f' -ek "{AM1_SP}"'
-            run(f"antechamber -i input.sdf -fi sdf -o {R}.mol2 -fo mol2 -c {cm} -nc {q} -at gaff2 -rn {R} -pf y -dr no{ek}", log)
+            if opt == "am1":
+                run(f"antechamber -i input.sdf -fi sdf -o {R}.mol2 -fo mol2 -c {cm} -nc {q} -at gaff2 -rn {R} -pf y -dr no", log)
+            else:  # charges on the --opt geometry (AM1 single point), then the input coordinates back into the MOL2
+                run(f"antechamber -i charge_geom.sdf -fi sdf -o {R}.mol2 -fo mol2 -c {cm} -nc {q} -at gaff2 -rn {R} -pf y "
+                    f"-dr no -ek \"{AM1_SP}\"", log)
+                set_mol2_coords(f"{R}.mol2", m.GetConformer().GetPositions())
         elif cm == "user":
             run(f"antechamber -i '{os.path.abspath(a.input)}' -fi mol2 -o {R}.mol2 -fo mol2 -at gaff2 -rn {R} -pf y -dr no", log)
-            if opt != "am1": set_mol2_coords(f"{R}.mol2", m.GetConformer().GetPositions())
         else:  # nagl charges on gaff2 types
             run(f"antechamber -i input.sdf -fi sdf -o {R}_types.mol2 -fo mol2 -at gaff2 -rn {R} -pf y -dr no", log)
             from openff.toolkit import Molecule
@@ -139,15 +149,14 @@ def main():
     qsum = sum(charges)
     if abs(qsum - q) > 0.01: die(f"partial charges sum to {qsum:.4f}, formal charge is {q}")
     rec = {"input": a.input, "resname": R, "net_charge": q, "n_atoms": m.GetNumAtoms(), "n_H": nH,
-           "forcefield": ff_desc, "charge_model": cm, "charge_sum": round(qsum, 4), "opt": opt,
+           "forcefield": ff_desc, "charge_model": cm, "charge_sum": round(qsum, 4),
+           "opt": opt if (a.ff == "gaff2" and cm in ("abcg2", "bcc")) else None,
            "versions": versions(), "date": datetime.datetime.now().isoformat(timespec="seconds")}
-    if a.geom: rec["geom"] = a.geom
-    if opt_note: rec["opt_note"] = opt_note
+    rec.update({k: v for k, v in opt_info.items() if k != "opt" and v is not None})
     json.dump(rec, open("ligparam.json", "w"), indent=1)
     print(f"ligparam: {R}  net charge {q:+d}  charges sum {qsum:+.4f}  ({ff_desc}, {cm})  ->  {out}")
     if opt != "am1":
-        print(f"  geometry: --opt {opt} ({opt_note})" + ("; AM1 not re-optimised (maxcyc=0)" if cm in ("abcg2", "bcc") else "")
-              + ". Output coordinates = this geometry fitted onto the input pose")
+        print(f"  charge geometry: --opt {opt} ({opt_info.get('opt_note')}); AM1 maxcyc=0 on it. Outputs keep the input coordinates")
     print(f"  Amber: {R}.prmtop {R}.inpcrd" + (f" {R}.mol2 {R}.frcmod {R}.lib" if a.ff == "gaff2" else ""))
     print(f"  GROMACS: {R}.itp (moleculetype + atomtypes, #include in your topology) {R}.top {R}.gro   OpenMM: {R}_system.xml")
 
@@ -158,31 +167,44 @@ OPT_CHOICES = ["am1", "hf", "aimnet2", "uma", "ani2x", "mace-off", "none"]
 AM1_SP = "qm_theory='AM1', grms_tol=0.0005, scfconv=1.d-10, ndiis_attempts=700, maxcyc=0"
 G16_MODULE, G16_NODE, G16_CPUS, G16_MEM = "gaussian/g16-avx2", "cws02", 16, "32G"
 
+def need_covparam(opt):
+    """covparam (NNP relaxation) is a separate package; a clean message instead of a traceback when it is missing or unreadable."""
+    try:
+        import covparam.opt, covparam.errors, covparam.model  # noqa: F401
+    except Exception as e:
+        die(f"--opt {opt} needs covparam (module load covparam/1.0, or use --opt hf / none): cannot import it ({type(e).__name__}: {e})")
+
 def pre_optimise(m, q, opt, a, out, log):
-    """Geometry for the charges (--opt other than am1). Returns (mol with new coordinates, opt used, note).
-    hf without --geom/--local writes the Gaussian job and exits."""
-    import numpy as np
+    """Geometry for the charges (--opt other than am1): (mol with that geometry, provenance dict for ligparam.json).
+    hf without --geom/--local writes the Gaussian job (+ opt_hf.json with the requested model) and exits."""
     from rdkit import Chem
     from rdkit.Geometry import Point3D
-    x0 = m.GetConformer().GetPositions()
+    info = {"opt": opt, "opt_requested": opt, "opt_note": None, "geom": None}
     if a.geom:
-        x, note = read_geom(a.geom, m), f"geometry from {a.geom}"
+        side = os.path.join(os.path.dirname(a.geom), "opt_hf.json")
+        if os.path.isfile(side):  # written with the job: keeps a requested NNP model and the fallback reason
+            try: info.update({k: v for k, v in json.load(open(side)).items() if k in ("opt_requested", "opt_note")})
+            except (OSError, ValueError): pass
+        x = read_geom(a.geom, m); info["geom"] = a.geom
+        info["opt_note"] = "; ".join(t for t in (info["opt_note"], f"HF/6-31G* geometry from {a.geom}") if t)
     elif opt == "none":
-        return m, "none", "input geometry, no optimisation"
+        info["opt_note"] = "input geometry, no optimisation"
+        return Chem.Mol(m), info
     else:
-        note = None
         if opt != "hf":
+            need_covparam(opt)
             from covparam.opt import optimise
             from covparam.errors import CovparamCheckError, CovparamInputError
             try:
                 res = optimise(nnp_fragment(m, q), opt, os.path.join(out, f"opt_{opt}"), log)
             except (CovparamCheckError, CovparamInputError) as e: die(str(e))
             if res.model_used == "hf":
-                print(f"ligparam: note: {res.note}"); note = res.note; opt = "hf"
+                print(f"ligparam: note: {res.note}"); info.update(opt="hf", opt_note=res.note)
             else:
-                x, note = res.mol.GetConformer().GetPositions(), res.note
-        if opt == "hf":
+                x = res.mol.GetConformer().GetPositions(); info["opt_note"] = res.note
+        if info["opt"] == "hf":
             write_hf_job(m, q, out)
+            json.dump({k: info[k] for k in ("opt_requested", "opt_note")}, open(os.path.join(out, "opt_hf.json"), "w"), indent=1)
             if not a.local:
                 print(f"ligparam: wrote {out}/opt_hf.gjf and {out}/run_opt.sh (HF/6-31G* optimisation, {G16_NODE}, "
                       f"{G16_CPUS} cores). Submit it, then rerun with the optimised geometry:\n"
@@ -191,25 +213,28 @@ def pre_optimise(m, q, opt, a, out, log):
             run("bash -lc " + shlex.quote(f"module load {G16_MODULE} && export GAUSS_SCRDIR=$(mktemp -d /tmp/ligparam_g16.XXXXXX)"
                                          f" && trap 'rm -rf \"$GAUSS_SCRDIR\"' EXIT && cd {shlex.quote(out)} && "
                                          f'"$g16root/g16/g16" opt_hf.gjf'), log)
-            a.geom = os.path.join(out, "opt_hf.log")
-            x = read_geom(a.geom, m); note = (note + "; " if note else "") + "Gaussian HF/6-31G* (--local)"
-    x = fit_onto(np.asarray(x, float), x0)
-    m = Chem.Mol(m); conf = m.GetConformer()
+            info["geom"] = os.path.join(out, "opt_hf.log"); x = read_geom(info["geom"], m)
+            info["opt_note"] = "; ".join(t for t in (info["opt_note"], "Gaussian HF/6-31G* (--local)") if t)
+    mq = Chem.Mol(m); conf = mq.GetConformer()
     for i, p in enumerate(x): conf.SetAtomPosition(i, Point3D(*map(float, p)))
-    return m, opt, note
+    return mq, info
 
 def nnp_fragment(m, q):
     from covparam.model import Fragment
     return Fragment(mol=m, cap_atom_idx=set(), backbone_idx={}, residue_idx=list(range(m.GetNumAtoms())), net_charge=q)
 
+def hf_opt_route(natoms):
+    """covparam's Gaussian Opt keyword for a free ligand (no frozen coordinates; kept here so hf needs no covparam):
+    MaxCycles=500, CalcFC (analytic HF Hessian at the start) up to 50 atoms, MaxStep=10 (smaller trust radius)."""
+    return "Opt=(" + ",".join(["MaxCycles=500"] + (["CalcFC"] if natoms <= 50 else []) + ["MaxStep=10"]) + ")"
+
 def write_hf_job(m, q, out):
-    """opt_hf.gjf (covparam's Opt route for a free ligand: no frozen coordinates) + run_opt.sh (cws02, node-local scratch)."""
-    from covparam.charges.resp import opt_route
+    """opt_hf.gjf (HF/6-31G* Opt, no frozen coordinates) + run_opt.sh (cws02, node-local scratch)."""
     conf = m.GetConformer()
     xyz = [f"{at.GetSymbol():<2s} {p.x:14.8f} {p.y:14.8f} {p.z:14.8f}"
            for at, p in ((at, conf.GetAtomPosition(at.GetIdx())) for at in m.GetAtoms())]
     open(os.path.join(out, "opt_hf.gjf"), "w").write("\n".join(
-        ["%chk=opt_hf.chk", f"%nprocshared={G16_CPUS}", "%mem=30GB", f"#P HF/6-31G* {opt_route(nnp_fragment(m, q))} NoSymm",
+        ["%chk=opt_hf.chk", f"%nprocshared={G16_CPUS}", "%mem=30GB", f"#P HF/6-31G* {hf_opt_route(m.GetNumAtoms())} NoSymm",
          "", "ligparam HF/6-31G* optimisation", "", f"{q} 1"] + xyz) + "\n\n")
     sh = os.path.join(out, "run_opt.sh")
     open(sh, "w").write(f"""#!/bin/bash -l
@@ -234,7 +259,7 @@ cd {shlex.quote(out)}
     os.chmod(sh, 0o755)
 
 def rerun_args(out):
-    """This command line with --opt/--local replaced by --opt hf --geom OUT/opt_hf.log."""
+    """This command line with --opt/--local replaced by --opt hf --geom OUT/opt_hf.log (opt_hf.json keeps the requested model)."""
     args, skip = [], False
     for x in sys.argv[1:]:
         if skip: skip = False; continue
@@ -271,16 +296,8 @@ def read_geom(path, m):
     if z != want: die(f"--geom {path}: atoms are not in the input's order (elements differ at atom {next(i for i in range(n) if z[i] != want[i]) + 1})")
     return x
 
-def fit_onto(x, ref):
-    """Best-fit (Kabsch, all atoms) rotation + translation of x onto ref: the optimised ligand sits on the input pose."""
-    import numpy as np
-    cx, cr = x.mean(0), ref.mean(0)
-    u, _, vt = np.linalg.svd((x - cx).T @ (ref - cr))
-    d = np.sign(np.linalg.det(u @ vt))
-    return (x - cx) @ (u @ np.diag([1, 1, d]) @ vt) + cr
-
 def set_mol2_coords(path, xyz):
-    """Replace the x, y, z columns of a MOL2's atom rows (charge-model user: the MOL2 keeps its own charges)."""
+    """Replace the x, y, z columns of a MOL2's atom rows (--opt: charges from the optimised geometry, coordinates of the input)."""
     txt = open(path).read()
     head, rest = txt.split("@<TRIPOS>ATOM\n", 1)
     atoms, tail = rest.split("@<TRIPOS>", 1)
