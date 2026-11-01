@@ -1,0 +1,6 @@
+#!/bin/bash
+# ligparam launcher: pins the ligparam env (independent of the user's conda/PYTHONPATH/AMBERHOME)
+ENV=${LIGPARAM_ENV:-/cta/capps/envs/ligparam}
+export PYTHONNOUSERSITE=1 AMBERHOME=$ENV PATH=$ENV/bin:$PATH
+unset PYTHONPATH
+exec $ENV/bin/python "$(dirname "$(dirname "$(readlink -f "$0")")")/ligparam.py" "$@"
